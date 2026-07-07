@@ -1,5 +1,6 @@
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.ActionEvent;
 import java.io.File;
 import java.sql.*;
 import java.time.format.DateTimeFormatter;
@@ -86,12 +87,27 @@ public class EagleCashOnlineBankingApp extends JFrame {
     // compiles correctly no matter what text encoding your editor/terminal uses.
     private static final String CURRENCY_SYMBOL = "\u20B1";
 
+    // ---- Navy blue theme colors ----
+    // Applied to every screen's background panel. Text colors below are chosen
+    // for contrast against this navy so labels stay readable.
+    private static final Color NAVY_BLUE = new Color(9, 30, 62);
+    private static final Color LIGHT_TEXT = new Color(235, 240, 250);
+    // Brighter than plain green - plain (0,128,0) is too dark to read well on navy.
+    private static final Color SUCCESS_GREEN = new Color(102, 230, 140);
+
     public EagleCashOnlineBankingApp() {
         super("EagleCash Online Banking App");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(460, 520);
         setLocationRelativeTo(null);
         setResizable(false);
+
+        // Replaces the default Java coffee-cup icon in the title bar / taskbar
+        // with the eagle image, if it was loaded successfully.
+        Image logoForIcon = loadLogoImage();
+        if (logoForIcon != null) {
+            setIconImage(logoForIcon);
+        }
 
         DatabaseHelper.initDatabase();
 
@@ -162,7 +178,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
         // that unit as a whole, so the image stays right next to the text no
         // matter how wide the window is.
         JPanel header = new JPanel(new FlowLayout(FlowLayout.CENTER, 14, 6));
-        header.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+        header.setBorder(BorderFactory.createEmptyBorder(20, 10, 6, 10));
+        header.setBackground(NAVY_BLUE);
+        header.setOpaque(true);
 
         Image logoImage = loadLogoImage();
         JLabel logoLabel;
@@ -175,6 +193,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
             // Friendly fallback if eagle_logo.png isn't in the folder, instead of crashing.
             logoLabel = new JLabel("(eagle_logo.png not found)");
             logoLabel.setFont(new Font("Tahoma", Font.ITALIC, 10));
+            logoLabel.setForeground(LIGHT_TEXT);
         }
         header.add(logoLabel);
 
@@ -185,6 +204,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         JLabel appName = new JLabel("EagleCash");
         appName.setFont(new Font("Tahoma", Font.BOLD, 20));
         appName.setAlignmentX(Component.CENTER_ALIGNMENT);
+        appName.setForeground(LIGHT_TEXT);
 
         // Wrapped onto two lines (instead of one long line) so it stays readable,
         // and centered using HTML since a plain JLabel won't wrap or center
@@ -196,6 +216,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         tagline.setFont(new Font(CALLIGRAPHY_FONT, Font.ITALIC, 14));
         tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
         tagline.setHorizontalAlignment(SwingConstants.CENTER);
+        tagline.setForeground(LIGHT_TEXT);
 
         textPanel.add(Box.createVerticalGlue());
         textPanel.add(Box.createVerticalStrut(10)); // nudges "EagleCash" down a bit from the top
@@ -211,10 +232,34 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
     /** Wraps a screen's content panel with the shared header along the top. */
     private JPanel wrapWithHeader(JPanel content) {
+        applyNavyTheme(content);
+
         JPanel wrapper = new JPanel(new BorderLayout());
+        wrapper.setBackground(NAVY_BLUE);
+        wrapper.setOpaque(true);
         wrapper.add(buildHeader(), BorderLayout.NORTH);
         wrapper.add(content, BorderLayout.CENTER);
         return wrapper;
+    }
+
+    /**
+     * Paints a screen's content panel navy blue and switches any plain-black
+     * JLabel text to a light color so it stays readable on the dark
+     * background. Labels that were already given a custom color (e.g. the
+     * red/green status messages) are left alone, since those already have
+     * enough contrast against navy.
+     */
+    private void applyNavyTheme(JPanel content) {
+        content.setBackground(NAVY_BLUE);
+        content.setOpaque(true);
+        for (Component c : content.getComponents()) {
+            if (c instanceof JLabel) {
+                JLabel label = (JLabel) c;
+                if (label.getForeground().equals(Color.BLACK)) {
+                    label.setForeground(LIGHT_TEXT);
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -658,6 +703,20 @@ public class EagleCashOnlineBankingApp extends JFrame {
             cardLayout.show(mainPanel, FORGOT_EMAIL_SCREEN);
         });
 
+        // Pressing Enter while focus is anywhere on the login screen (email
+        // field, PIN field, etc.) clicks the Login button, same as clicking
+        // it with the mouse. WHEN_ANCESTOR_OF_FOCUSED_COMPONENT scopes this
+        // to only fire while a component inside THIS panel has focus, so it
+        // won't interfere with Enter on other screens (Register, etc.).
+        panel.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .put(KeyStroke.getKeyStroke("ENTER"), "loginOnEnter");
+        panel.getActionMap().put("loginOnEnter", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                loginButton.doClick();
+            }
+        });
+
         return wrapWithHeader(panel);
     }
 
@@ -734,7 +793,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                     return;
                 }
                 DatabaseHelper.insertUser(name, email, pin);
-                messageLabel.setForeground(new Color(0, 128, 0));
+                messageLabel.setForeground(SUCCESS_GREEN);
                 messageLabel.setText("Account created! You can log in now.");
                 nameField.setText("");
                 emailField.setText("");
@@ -816,7 +875,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 DatabaseHelper.updateBalance(currentUser.id, newBalance);
                 DatabaseHelper.insertTransaction(currentUser.id, "Deposit", amount);
                 currentUser.balance = newBalance;
-                messageLabel.setForeground(new Color(0, 128, 0));
+                messageLabel.setForeground(SUCCESS_GREEN);
                 messageLabel.setText("Deposited " + CURRENCY_SYMBOL + String.format("%.2f", amount));
                 amountField.setText("");
                 refreshDashboard();
@@ -839,7 +898,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 DatabaseHelper.updateBalance(currentUser.id, newBalance);
                 DatabaseHelper.insertTransaction(currentUser.id, "Withdraw", amount);
                 currentUser.balance = newBalance;
-                messageLabel.setForeground(new Color(0, 128, 0));
+                messageLabel.setForeground(SUCCESS_GREEN);
                 messageLabel.setText("Withdrew " + CURRENCY_SYMBOL + String.format("%.2f", amount));
                 amountField.setText("");
                 refreshDashboard();
@@ -984,7 +1043,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 DatabaseHelper.transferFunds(currentUser.id, currentUser.email, recipientEmail, amount);
                 currentUser.balance -= amount;
 
-                transferMessageLabel.setForeground(new Color(0, 128, 0));
+                transferMessageLabel.setForeground(SUCCESS_GREEN);
                 transferMessageLabel.setText("Transferred " + CURRENCY_SYMBOL
                         + String.format("%.2f", amount) + " to " + recipientEmail);
                 transferEmailField.setText("");
