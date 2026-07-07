@@ -1,40 +1,48 @@
 import javax.swing.*;
 import java.awt.*;
+import java.io.File;
 import java.sql.*;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import javax.imageio.ImageIO;
 
 /**
- * SimpleBankUI_SQLite - Same app as SimpleBankUI.java, but backed by a real
- * SQLite database instead of an in-memory HashMap. Data now survives
- * between runs (it's saved to a file called "bank.db" next to this program).
+ * EagleCashOnlineBankingApp - A Java Swing banking app backed by a real
+ * SQLite database (not an in-memory HashMap). Data survives between runs -
+ * it's saved to a file called "bank.db" next to this program.
  *
- * WHAT CHANGED FROM THE IN-MEMORY VERSION:
- *   - A new DatabaseHelper class handles all SQL (create tables, insert,
- *     update, select). The Swing/UI code barely changes at all - it just
- *     calls DatabaseHelper methods instead of touching a HashMap.
- *   - User now has an "id" (the database's primary key) instead of being
- *     looked up by a HashMap key.
- *   - Transaction history is stored in its own "transactions" table and
- *     queried when you open the History screen, instead of living in a
- *     Java List in memory.
+ * FEATURES: Register, Login, Deposit, Withdraw, Transfer Funds (to another
+ * registered user by email), and Transaction History - all persisted to
+ * SQLite via JDBC.
  *
- * REQUIRED SETUP - this needs the SQLite JDBC driver on your classpath:
- *   1. Download the driver jar (one file, no installation needed):
+ * REQUIRED SETUP - this needs two jars on your classpath:
+ *   1. SQLite JDBC driver:
  *      https://repo1.maven.org/maven2/org/xerial/sqlite-jdbc/3.46.1.0/sqlite-jdbc-3.46.1.0.jar
- *   2. Put it in the same folder as this .java file.
+ *   2. SLF4J API (a logging library sqlite-jdbc depends on):
+ *      https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.13/slf4j-api-2.0.13.jar
+ *   Put both jars in the same folder as this .java file, then:
  *   3. Compile:
- *        javac -cp sqlite-jdbc-3.46.1.0.jar SimpleBankUI_SQLite.java
+ *        javac -cp sqlite-jdbc-3.46.1.0.jar;slf4j-api-2.0.13.jar EagleCashOnlineBankingApp.java
  *   4. Run:
- *        java -cp .:sqlite-jdbc-3.46.1.0.jar SimpleBankUI_SQLite        (Mac/Linux)
- *        java -cp .;sqlite-jdbc-3.46.1.0.jar SimpleBankUI_SQLite        (Windows)
+ *        java -cp .;sqlite-jdbc-3.46.1.0.jar;slf4j-api-2.0.13.jar EagleCashOnlineBankingApp   (Windows)
+ *        java -cp .:sqlite-jdbc-3.46.1.0.jar:slf4j-api-2.0.13.jar EagleCashOnlineBankingApp   (Mac/Linux)
+ *
+ * IMPORTANT: the jar filenames in these commands must exactly match the
+ * files actually sitting in your folder (check with `dir` / `ls`). If you
+ * ever download a different version, update these commands to match -
+ * Java will not report an error for a wrong/missing jar name in -cp, it
+ * will just silently fail to find the driver, which looks like this same
+ * "Missing Driver" dialog.
  *
  * A file named bank.db will appear in the folder the first time you run it -
  * that's your whole database, viewable with any SQLite browser tool.
  */
-public class SimpleBankUI_SQLite extends JFrame {
+public class EagleCashOnlineBankingApp extends JFrame {
 
     // ---- Currently logged-in user ----
     private User currentUser;
@@ -64,10 +72,10 @@ public class SimpleBankUI_SQLite extends JFrame {
     // compiles correctly no matter what text encoding your editor/terminal uses.
     private static final String CURRENCY_SYMBOL = "\u20B1";
 
-    public SimpleBankUI_SQLite() {
-        super("Simple Bank (SQLite)");
+    public EagleCashOnlineBankingApp() {
+        super("EagleCash Online Banking App");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(420, 380);
+        setSize(460, 480);
         setLocationRelativeTo(null);
         setResizable(false);
 
@@ -81,6 +89,111 @@ public class SimpleBankUI_SQLite extends JFrame {
 
         add(mainPanel);
         cardLayout.show(mainPanel, LOGIN_SCREEN);
+    }
+
+    // ------------------------------------------------------------------
+    // LOGO IMAGE + HEADER
+    // ------------------------------------------------------------------
+
+    /** Filename of the logo image. Must sit in the same folder as this .java/.class file. */
+    private static final String LOGO_FILENAME = "eagle_logo.png";
+    private static final int LOGO_HEIGHT = 56; // pixels; width is scaled to match the image's aspect ratio
+
+    private static Image cachedLogoImage;
+    private static boolean loggedMissingLogo = false;
+
+    /** Loads eagle_logo.png once and reuses it. Returns null (without crashing) if the file is missing. */
+    private static Image loadLogoImage() {
+        if (cachedLogoImage != null) return cachedLogoImage;
+        try {
+            cachedLogoImage = ImageIO.read(new File(LOGO_FILENAME));
+        } catch (Exception e) {
+            if (!loggedMissingLogo) {
+                System.err.println("Could not load " + LOGO_FILENAME + ": " + e.getMessage());
+                System.err.println("Make sure " + LOGO_FILENAME + " is in the same folder as this program.");
+                loggedMissingLogo = true;
+            }
+        }
+        return cachedLogoImage;
+    }
+
+    /**
+     * Picks the first available script/calligraphy-style font installed on this
+     * machine (Windows ships "Segoe Script" by default; a few common alternatives
+     * are checked too). Falls back to an italic serif font if none are found, so
+     * the tagline still looks reasonably decorative on any computer.
+     */
+    private static String pickCalligraphyFont() {
+        String[] preferred = {"Segoe Script", "Brush Script MT", "Lucida Handwriting", "Monotype Corsiva"};
+        Set<String> available = new HashSet<>(Arrays.asList(
+                GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames()));
+        for (String name : preferred) {
+            if (available.contains(name)) return name;
+        }
+        return Font.SERIF; // reasonable fallback; combined with ITALIC below
+    }
+
+    private static final String CALLIGRAPHY_FONT = pickCalligraphyFont();
+
+    /**
+     * Header shown at the top of every screen: the eagle logo on the left,
+     * with "EagleCash" and the tagline centered vertically beside it.
+     */
+    private JPanel buildHeader() {
+        JPanel header = new JPanel(new BorderLayout(12, 0));
+        header.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+
+        Image logoImage = loadLogoImage();
+        JLabel logoLabel;
+        if (logoImage != null) {
+            int targetWidth = Math.max(1,
+                    (int) Math.round(logoImage.getWidth(null) * (LOGO_HEIGHT / (double) logoImage.getHeight(null))));
+            Image scaled = logoImage.getScaledInstance(targetWidth, LOGO_HEIGHT, Image.SCALE_SMOOTH);
+            logoLabel = new JLabel(new ImageIcon(scaled));
+        } else {
+            // Friendly fallback if eagle_logo.png isn't in the folder, instead of crashing.
+            logoLabel = new JLabel("(eagle_logo.png not found)");
+            logoLabel.setFont(new Font("Tahoma", Font.ITALIC, 10));
+        }
+        header.add(logoLabel, BorderLayout.WEST);
+
+        JPanel textPanel = new JPanel();
+        textPanel.setOpaque(false);
+        textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.Y_AXIS));
+
+        JLabel appName = new JLabel("EagleCash");
+        appName.setFont(new Font("Tahoma", Font.BOLD, 20));
+        appName.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        // Wrapped onto two lines (instead of one long line) so it stays readable,
+        // and centered using HTML since a plain JLabel won't wrap or center
+        // multi-line text on its own.
+        JLabel tagline = new JLabel(
+                "<html><div style='text-align:center;'>" +
+                "Bank Smarter. Bank Securely.<br>" +
+                "Bank with EagleCash</div></html>");
+        tagline.setFont(new Font(CALLIGRAPHY_FONT, Font.ITALIC, 14));
+        tagline.setAlignmentX(Component.CENTER_ALIGNMENT);
+        tagline.setHorizontalAlignment(SwingConstants.CENTER);
+
+        textPanel.add(Box.createVerticalGlue());
+        textPanel.add(Box.createVerticalStrut(10)); // nudges "EagleCash" down a bit from the top
+        textPanel.add(appName);
+        textPanel.add(Box.createVerticalStrut(4));
+        textPanel.add(tagline);
+        textPanel.add(Box.createVerticalGlue());
+
+        header.add(textPanel, BorderLayout.CENTER);
+
+        return header;
+    }
+
+    /** Wraps a screen's content panel with the shared header along the top. */
+    private JPanel wrapWithHeader(JPanel content) {
+        JPanel wrapper = new JPanel(new BorderLayout());
+        wrapper.add(buildHeader(), BorderLayout.NORTH);
+        wrapper.add(content, BorderLayout.CENTER);
+        return wrapper;
     }
 
     // ------------------------------------------------------------------
@@ -151,8 +264,9 @@ public class SimpleBankUI_SQLite extends JFrame {
             } catch (ClassNotFoundException e) {
                 JOptionPane.showMessageDialog(null,
                         "The SQLite driver jar was not found on the classpath.\n" +
-                        "Make sure sqlite-jdbc-3.46.1.0.jar is in this folder and\n" +
-                        "included in your -cp argument when running the program.",
+                        "Make sure the sqlite-jdbc jar (and slf4j-api jar) are\n" +
+                        "in this folder and included in your -cp argument\n" +
+                        "when compiling and running the program.",
                         "Missing Driver", JOptionPane.ERROR_MESSAGE);
                 System.exit(1);
             }
@@ -386,7 +500,7 @@ public class SimpleBankUI_SQLite extends JFrame {
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         JLabel title = new JLabel("Login");
-        title.setFont(new Font("SansSerif", Font.BOLD, 20));
+        title.setFont(new Font("Tahoma", Font.BOLD, 20));
 
         JLabel emailLabel = new JLabel("Email:");
         JTextField emailField = new JTextField(18);
@@ -445,7 +559,7 @@ public class SimpleBankUI_SQLite extends JFrame {
             cardLayout.show(mainPanel, REGISTER_SCREEN);
         });
 
-        return panel;
+        return wrapWithHeader(panel);
     }
 
     // ------------------------------------------------------------------
@@ -458,7 +572,7 @@ public class SimpleBankUI_SQLite extends JFrame {
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         JLabel title = new JLabel("Create Account");
-        title.setFont(new Font("SansSerif", Font.BOLD, 20));
+        title.setFont(new Font("Tahoma", Font.BOLD, 20));
 
         JLabel nameLabel = new JLabel("Name:");
         JTextField nameField = new JTextField(18);
@@ -538,7 +652,7 @@ public class SimpleBankUI_SQLite extends JFrame {
             cardLayout.show(mainPanel, LOGIN_SCREEN);
         });
 
-        return panel;
+        return wrapWithHeader(panel);
     }
 
     // ------------------------------------------------------------------
@@ -551,10 +665,10 @@ public class SimpleBankUI_SQLite extends JFrame {
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         welcomeLabel = new JLabel("Welcome!");
-        welcomeLabel.setFont(new Font("SansSerif", Font.BOLD, 18));
+        welcomeLabel.setFont(new Font("Tahoma", Font.BOLD, 18));
 
         balanceLabel = new JLabel("Balance: " + CURRENCY_SYMBOL + "0.00");
-        balanceLabel.setFont(new Font("SansSerif", Font.PLAIN, 16));
+        balanceLabel.setFont(new Font("Tahoma", Font.PLAIN, 16));
 
         JTextField amountField = new JTextField(10);
         JButton depositButton = new JButton("Deposit");
@@ -657,7 +771,7 @@ public class SimpleBankUI_SQLite extends JFrame {
             cardLayout.show(mainPanel, LOGIN_SCREEN);
         });
 
-        return panel;
+        return wrapWithHeader(panel);
     }
 
     // ------------------------------------------------------------------
@@ -668,7 +782,7 @@ public class SimpleBankUI_SQLite extends JFrame {
         panel.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
 
         JLabel title = new JLabel("Transaction History", SwingConstants.CENTER);
-        title.setFont(new Font("SansSerif", Font.BOLD, 18));
+        title.setFont(new Font("Tahoma", Font.BOLD, 18));
 
         historyListModel = new DefaultListModel<>();
         JList<String> historyList = new JList<>(historyListModel);
@@ -682,7 +796,7 @@ public class SimpleBankUI_SQLite extends JFrame {
         panel.add(scrollPane, BorderLayout.CENTER);
         panel.add(backButton, BorderLayout.SOUTH);
 
-        return panel;
+        return wrapWithHeader(panel);
     }
 
     /** Queries the database for the current user's transactions and refreshes the list on screen. */
@@ -714,7 +828,7 @@ public class SimpleBankUI_SQLite extends JFrame {
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         JLabel title = new JLabel("Transfer Funds");
-        title.setFont(new Font("SansSerif", Font.BOLD, 20));
+        title.setFont(new Font("Tahoma", Font.BOLD, 20));
 
         JLabel emailLabel = new JLabel("Recipient Email:");
         transferEmailField = new JTextField(18);
@@ -789,7 +903,7 @@ public class SimpleBankUI_SQLite extends JFrame {
             cardLayout.show(mainPanel, DASHBOARD_SCREEN);
         });
 
-        return panel;
+        return wrapWithHeader(panel);
     }
 
     /** Parses the amount field, showing an error message if it's invalid. Returns null on failure. */
@@ -821,7 +935,7 @@ public class SimpleBankUI_SQLite extends JFrame {
     // ------------------------------------------------------------------
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
-            SimpleBankUI_SQLite app = new SimpleBankUI_SQLite();
+            EagleCashOnlineBankingApp app = new EagleCashOnlineBankingApp();
             app.setVisible(true);
         });
     }
