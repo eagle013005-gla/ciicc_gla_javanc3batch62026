@@ -57,6 +57,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
     private static final String DASHBOARD_SCREEN = "DASHBOARD";
     private static final String HISTORY_SCREEN = "HISTORY";
     private static final String TRANSFER_SCREEN = "TRANSFER";
+    private static final String FORGOT_EMAIL_SCREEN = "FORGOT_EMAIL";
+    private static final String FORGOT_OTP_SCREEN = "FORGOT_OTP";
+    private static final String FORGOT_RESET_SCREEN = "FORGOT_RESET";
 
     private JLabel balanceLabel;
     private JLabel welcomeLabel;
@@ -64,6 +67,17 @@ public class EagleCashOnlineBankingApp extends JFrame {
     private JTextField transferEmailField;
     private JTextField transferAmountField;
     private JLabel transferMessageLabel;
+
+    // Forgot Password flow - tracks which email is going through the reset
+    // process as the user moves between the three forgot-password screens.
+    private String forgotEmail;
+    private JTextField forgotEmailField;
+    private JLabel forgotEmailMessageLabel;
+    private JTextField forgotOtpField;
+    private JLabel forgotOtpMessageLabel;
+    private JPasswordField forgotNewPinField;
+    private JPasswordField forgotConfirmPinField;
+    private JLabel forgotResetMessageLabel;
 
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a");
@@ -75,7 +89,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
     public EagleCashOnlineBankingApp() {
         super("EagleCash Online Banking App");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(460, 480);
+        setSize(460, 520);
         setLocationRelativeTo(null);
         setResizable(false);
 
@@ -86,6 +100,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
         mainPanel.add(buildDashboardScreen(), DASHBOARD_SCREEN);
         mainPanel.add(buildHistoryScreen(), HISTORY_SCREEN);
         mainPanel.add(buildTransferScreen(), TRANSFER_SCREEN);
+        mainPanel.add(buildForgotEmailScreen(), FORGOT_EMAIL_SCREEN);
+        mainPanel.add(buildForgotOtpScreen(), FORGOT_OTP_SCREEN);
+        mainPanel.add(buildForgotResetScreen(), FORGOT_RESET_SCREEN);
 
         add(mainPanel);
         cardLayout.show(mainPanel, LOGIN_SCREEN);
@@ -136,11 +153,15 @@ public class EagleCashOnlineBankingApp extends JFrame {
     private static final String CALLIGRAPHY_FONT = pickCalligraphyFont();
 
     /**
-     * Header shown at the top of every screen: the eagle logo on the left,
-     * with "EagleCash" and the tagline centered vertically beside it.
+     * Header shown at the top of every screen: the eagle logo sits directly
+     * beside "EagleCash" and the tagline, and the whole group is centered
+     * together in the header (not the logo pinned to one edge separately).
      */
     private JPanel buildHeader() {
-        JPanel header = new JPanel(new BorderLayout(12, 0));
+        // FlowLayout.CENTER groups the logo + text as a single unit and centers
+        // that unit as a whole, so the image stays right next to the text no
+        // matter how wide the window is.
+        JPanel header = new JPanel(new FlowLayout(FlowLayout.CENTER, 14, 6));
         header.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
 
         Image logoImage = loadLogoImage();
@@ -155,7 +176,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
             logoLabel = new JLabel("(eagle_logo.png not found)");
             logoLabel.setFont(new Font("Tahoma", Font.ITALIC, 10));
         }
-        header.add(logoLabel, BorderLayout.WEST);
+        header.add(logoLabel);
 
         JPanel textPanel = new JPanel();
         textPanel.setOpaque(false);
@@ -183,7 +204,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         textPanel.add(tagline);
         textPanel.add(Box.createVerticalGlue());
 
-        header.add(textPanel, BorderLayout.CENTER);
+        header.add(textPanel);
 
         return header;
     }
@@ -277,7 +298,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
                     "  name TEXT NOT NULL," +
                     "  email TEXT NOT NULL UNIQUE," +
                     "  pin TEXT NOT NULL," +
-                    "  balance REAL NOT NULL DEFAULT 0" +
+                    "  balance REAL NOT NULL DEFAULT 0," +
+                    "  otp TEXT," +
+                    "  otp_expiry TEXT" +
                     ")";
             String transactionsTable =
                     "CREATE TABLE IF NOT EXISTS transactions (" +
@@ -303,14 +326,25 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 System.exit(1);
             }
 
-            // Migration: older copies of bank.db created before the Transfer
-            // feature existed won't have this column yet. Adding it here means
-            // you don't have to delete your existing database to get transfers
-            // working. If the column already exists, SQLite throws an error
-            // that we simply ignore.
+            // Migrations: older copies of bank.db created before these features
+            // existed won't have these columns yet. Adding them here means you
+            // don't have to delete your existing database. If a column already
+            // exists, SQLite throws an error that we simply ignore.
             try (Connection conn = connect();
                  Statement stmt = conn.createStatement()) {
                 stmt.execute("ALTER TABLE transactions ADD COLUMN target_email TEXT");
+            } catch (SQLException alreadyExists) {
+                // Expected on every run after the first - the column is already there.
+            }
+            try (Connection conn = connect();
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("ALTER TABLE users ADD COLUMN otp TEXT");
+            } catch (SQLException alreadyExists) {
+                // Expected on every run after the first - the column is already there.
+            }
+            try (Connection conn = connect();
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("ALTER TABLE users ADD COLUMN otp_expiry TEXT");
             } catch (SQLException alreadyExists) {
                 // Expected on every run after the first - the column is already there.
             }
@@ -334,6 +368,59 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 ps.setString(1, name);
                 ps.setString(2, email);
                 ps.setString(3, pin);
+                ps.executeUpdate();
+            }
+        }
+
+        /**
+         * Generates a 6-digit OTP, stores it against the given email with a
+         * 5-minute expiry, and returns it so the UI can display it.
+         *
+         * NOTE: A real production app would email this code instead of
+         * displaying it on screen (that's what the EagleCash design doc calls
+         * for). Sending real email needs an SMTP server and credentials,
+         * which is a lot of extra setup for a school project running on a
+         * lab computer, so this demo version shows the code directly instead.
+         */
+        static String generateOtp(String email) throws SQLException {
+            String otp = String.format("%06d", new java.util.Random().nextInt(1_000_000));
+            String expiry = LocalDateTime.now().plusMinutes(5).toString();
+            String sql = "UPDATE users SET otp = ?, otp_expiry = ? WHERE email = ?";
+            try (Connection conn = connect();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, otp);
+                ps.setString(2, expiry);
+                ps.setString(3, email);
+                ps.executeUpdate();
+            }
+            return otp;
+        }
+
+        /** Returns true if the entered OTP matches the stored one and hasn't expired yet. */
+        static boolean verifyOtp(String email, String enteredOtp) throws SQLException {
+            String sql = "SELECT otp, otp_expiry FROM users WHERE email = ?";
+            try (Connection conn = connect();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, email);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) return false;
+                    String storedOtp = rs.getString("otp");
+                    String expiryText = rs.getString("otp_expiry");
+                    if (storedOtp == null || expiryText == null) return false;
+                    if (!storedOtp.equals(enteredOtp)) return false;
+                    LocalDateTime expiry = LocalDateTime.parse(expiryText);
+                    return LocalDateTime.now().isBefore(expiry);
+                }
+            }
+        }
+
+        /** Sets a new PIN and clears out the used OTP so it can't be replayed. */
+        static void resetPin(String email, String newPin) throws SQLException {
+            String sql = "UPDATE users SET pin = ?, otp = NULL, otp_expiry = NULL WHERE email = ?";
+            try (Connection conn = connect();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, newPin);
+                ps.setString(2, email);
                 ps.executeUpdate();
             }
         }
@@ -510,6 +597,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         JButton loginButton = new JButton("Login");
         JButton goRegisterButton = new JButton("Create an account");
+        JButton forgotPasswordButton = new JButton("Forgot Password?");
 
         JLabel messageLabel = new JLabel(" ");
         messageLabel.setForeground(Color.RED);
@@ -531,6 +619,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
         panel.add(goRegisterButton, gbc);
 
         gbc.gridy = 5;
+        panel.add(forgotPasswordButton, gbc);
+
+        gbc.gridy = 6;
         panel.add(messageLabel, gbc);
 
         loginButton.addActionListener(e -> {
@@ -557,6 +648,14 @@ public class EagleCashOnlineBankingApp extends JFrame {
         goRegisterButton.addActionListener(e -> {
             messageLabel.setText(" ");
             cardLayout.show(mainPanel, REGISTER_SCREEN);
+        });
+
+        forgotPasswordButton.addActionListener(e -> {
+            messageLabel.setText(" ");
+            forgotEmailField.setText("");
+            forgotEmailMessageLabel.setForeground(Color.RED);
+            forgotEmailMessageLabel.setText(" ");
+            cardLayout.show(mainPanel, FORGOT_EMAIL_SCREEN);
         });
 
         return wrapWithHeader(panel);
@@ -901,6 +1000,249 @@ public class EagleCashOnlineBankingApp extends JFrame {
             transferMessageLabel.setForeground(Color.RED);
             transferMessageLabel.setText(" ");
             cardLayout.show(mainPanel, DASHBOARD_SCREEN);
+        });
+
+        return wrapWithHeader(panel);
+    }
+
+    // ------------------------------------------------------------------
+    // FORGOT PASSWORD - STEP 1: enter registered email, receive an OTP
+    // ------------------------------------------------------------------
+    private JPanel buildForgotEmailScreen() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JLabel title = new JLabel("Forgot Password");
+        title.setFont(new Font("Tahoma", Font.BOLD, 20));
+
+        JLabel emailLabel = new JLabel("Registered Email:");
+        forgotEmailField = new JTextField(18);
+
+        JButton sendButton = new JButton("Send OTP");
+        JButton backButton = new JButton("Back to Login");
+
+        forgotEmailMessageLabel = new JLabel(" ");
+        forgotEmailMessageLabel.setForeground(Color.RED);
+
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2;
+        panel.add(title, gbc);
+
+        gbc.gridwidth = 1;
+        gbc.gridy = 1; gbc.gridx = 0; panel.add(emailLabel, gbc);
+        gbc.gridx = 1; panel.add(forgotEmailField, gbc);
+
+        gbc.gridy = 2; gbc.gridx = 0; gbc.gridwidth = 2;
+        panel.add(sendButton, gbc);
+
+        gbc.gridy = 3;
+        panel.add(backButton, gbc);
+
+        gbc.gridy = 4;
+        panel.add(forgotEmailMessageLabel, gbc);
+
+        sendButton.addActionListener(e -> {
+            String email = forgotEmailField.getText().trim();
+            if (email.isEmpty()) {
+                forgotEmailMessageLabel.setForeground(Color.RED);
+                forgotEmailMessageLabel.setText("Enter your registered email.");
+                return;
+            }
+            try {
+                if (!DatabaseHelper.emailExists(email)) {
+                    forgotEmailMessageLabel.setForeground(Color.RED);
+                    forgotEmailMessageLabel.setText("No account found with that email.");
+                    return;
+                }
+                String otp = DatabaseHelper.generateOtp(email);
+                forgotEmail = email;
+
+                // DEMO NOTE: a real production app would email this code
+                // instead of showing it here (see the Security Considerations
+                // in the EagleCash design doc). Displaying it directly avoids
+                // needing SMTP/email credentials for this school project.
+                JOptionPane.showMessageDialog(panel,
+                        "Demo Mode: in a real app this code would be emailed to you.\n\n" +
+                        "Your OTP is: " + otp + "\n\nIt expires in 5 minutes.",
+                        "OTP Sent (Demo)", JOptionPane.INFORMATION_MESSAGE);
+
+                forgotOtpField.setText("");
+                forgotOtpMessageLabel.setForeground(Color.RED);
+                forgotOtpMessageLabel.setText(" ");
+                cardLayout.show(mainPanel, FORGOT_OTP_SCREEN);
+            } catch (SQLException ex) {
+                forgotEmailMessageLabel.setForeground(Color.RED);
+                forgotEmailMessageLabel.setText("Database error: " + ex.getMessage());
+            }
+        });
+
+        backButton.addActionListener(e -> {
+            forgotEmailMessageLabel.setForeground(Color.RED);
+            forgotEmailMessageLabel.setText(" ");
+            cardLayout.show(mainPanel, LOGIN_SCREEN);
+        });
+
+        return wrapWithHeader(panel);
+    }
+
+    // ------------------------------------------------------------------
+    // FORGOT PASSWORD - STEP 2: enter and verify the OTP
+    // ------------------------------------------------------------------
+    private JPanel buildForgotOtpScreen() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JLabel title = new JLabel("Enter OTP");
+        title.setFont(new Font("Tahoma", Font.BOLD, 20));
+
+        JLabel instructions = new JLabel("<html><div style='text-align:center;'>" +
+                "Enter the 6-digit code shown in the demo popup.</div></html>");
+        instructions.setFont(new Font("Tahoma", Font.PLAIN, 12));
+
+        JLabel otpLabel = new JLabel("OTP Code:");
+        forgotOtpField = new JTextField(18);
+
+        JButton verifyButton = new JButton("Verify OTP");
+        JButton backButton = new JButton("Back");
+
+        forgotOtpMessageLabel = new JLabel(" ");
+        forgotOtpMessageLabel.setForeground(Color.RED);
+
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2;
+        panel.add(title, gbc);
+
+        gbc.gridy = 1;
+        panel.add(instructions, gbc);
+
+        gbc.gridwidth = 1;
+        gbc.gridy = 2; gbc.gridx = 0; panel.add(otpLabel, gbc);
+        gbc.gridx = 1; panel.add(forgotOtpField, gbc);
+
+        gbc.gridy = 3; gbc.gridx = 0; gbc.gridwidth = 2;
+        panel.add(verifyButton, gbc);
+
+        gbc.gridy = 4;
+        panel.add(backButton, gbc);
+
+        gbc.gridy = 5;
+        panel.add(forgotOtpMessageLabel, gbc);
+
+        verifyButton.addActionListener(e -> {
+            String enteredOtp = forgotOtpField.getText().trim();
+            if (enteredOtp.isEmpty()) {
+                forgotOtpMessageLabel.setForeground(Color.RED);
+                forgotOtpMessageLabel.setText("Enter the OTP code.");
+                return;
+            }
+            try {
+                if (!DatabaseHelper.verifyOtp(forgotEmail, enteredOtp)) {
+                    forgotOtpMessageLabel.setForeground(Color.RED);
+                    forgotOtpMessageLabel.setText("Invalid or expired OTP.");
+                    return;
+                }
+                forgotOtpMessageLabel.setForeground(Color.RED);
+                forgotOtpMessageLabel.setText(" ");
+                forgotNewPinField.setText("");
+                forgotConfirmPinField.setText("");
+                forgotResetMessageLabel.setForeground(Color.RED);
+                forgotResetMessageLabel.setText(" ");
+                cardLayout.show(mainPanel, FORGOT_RESET_SCREEN);
+            } catch (SQLException ex) {
+                forgotOtpMessageLabel.setForeground(Color.RED);
+                forgotOtpMessageLabel.setText("Database error: " + ex.getMessage());
+            }
+        });
+
+        backButton.addActionListener(e -> {
+            forgotOtpMessageLabel.setForeground(Color.RED);
+            forgotOtpMessageLabel.setText(" ");
+            cardLayout.show(mainPanel, FORGOT_EMAIL_SCREEN);
+        });
+
+        return wrapWithHeader(panel);
+    }
+
+    // ------------------------------------------------------------------
+    // FORGOT PASSWORD - STEP 3: set a new PIN
+    // ------------------------------------------------------------------
+    private JPanel buildForgotResetScreen() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JLabel title = new JLabel("Reset PIN");
+        title.setFont(new Font("Tahoma", Font.BOLD, 20));
+
+        JLabel newPinLabel = new JLabel("New PIN (4+ digits):");
+        forgotNewPinField = new JPasswordField(18);
+
+        JLabel confirmPinLabel = new JLabel("Confirm PIN:");
+        forgotConfirmPinField = new JPasswordField(18);
+
+        JButton resetButton = new JButton("Reset PIN");
+        JButton cancelButton = new JButton("Cancel");
+
+        forgotResetMessageLabel = new JLabel(" ");
+        forgotResetMessageLabel.setForeground(Color.RED);
+
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2;
+        panel.add(title, gbc);
+
+        gbc.gridwidth = 1;
+        gbc.gridy = 1; gbc.gridx = 0; panel.add(newPinLabel, gbc);
+        gbc.gridx = 1; panel.add(forgotNewPinField, gbc);
+
+        gbc.gridy = 2; gbc.gridx = 0; panel.add(confirmPinLabel, gbc);
+        gbc.gridx = 1; panel.add(forgotConfirmPinField, gbc);
+
+        gbc.gridy = 3; gbc.gridx = 0; gbc.gridwidth = 2;
+        panel.add(resetButton, gbc);
+
+        gbc.gridy = 4;
+        panel.add(cancelButton, gbc);
+
+        gbc.gridy = 5;
+        panel.add(forgotResetMessageLabel, gbc);
+
+        resetButton.addActionListener(e -> {
+            String newPin = new String(forgotNewPinField.getPassword());
+            String confirmPin = new String(forgotConfirmPinField.getPassword());
+
+            if (!newPin.matches("\\d{4,}")) {
+                forgotResetMessageLabel.setForeground(Color.RED);
+                forgotResetMessageLabel.setText("PIN must be at least 4 digits.");
+                return;
+            }
+            if (!newPin.equals(confirmPin)) {
+                forgotResetMessageLabel.setForeground(Color.RED);
+                forgotResetMessageLabel.setText("PINs do not match.");
+                return;
+            }
+            try {
+                DatabaseHelper.resetPin(forgotEmail, newPin);
+                JOptionPane.showMessageDialog(panel,
+                        "Your PIN has been reset. Please log in with your new PIN.",
+                        "Success", JOptionPane.INFORMATION_MESSAGE);
+                forgotEmail = null;
+                forgotNewPinField.setText("");
+                forgotConfirmPinField.setText("");
+                forgotResetMessageLabel.setForeground(Color.RED);
+                forgotResetMessageLabel.setText(" ");
+                cardLayout.show(mainPanel, LOGIN_SCREEN);
+            } catch (SQLException ex) {
+                forgotResetMessageLabel.setForeground(Color.RED);
+                forgotResetMessageLabel.setText("Database error: " + ex.getMessage());
+            }
+        });
+
+        cancelButton.addActionListener(e -> {
+            forgotResetMessageLabel.setForeground(Color.RED);
+            forgotResetMessageLabel.setText(" ");
+            cardLayout.show(mainPanel, LOGIN_SCREEN);
         });
 
         return wrapWithHeader(panel);
