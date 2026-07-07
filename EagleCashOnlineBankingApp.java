@@ -95,6 +95,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
     private static final Color LIGHT_TEXT = new Color(235, 240, 250);
     // Brighter than plain green - plain (0,128,0) is too dark to read well on navy.
     private static final Color SUCCESS_GREEN = new Color(102, 230, 140);
+    // Flat, solid button background (no gradient/bevel) - light enough to keep
+    // navy button text readable, distinct enough to stand out from the navy panels.
+    private static final Color BUTTON_FLAT_BG = new Color(214, 224, 240);
 
     public EagleCashOnlineBankingApp() {
         super("EagleCash Online Banking App");
@@ -266,8 +269,48 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 if (!fg.equals(Color.RED) && !fg.equals(SUCCESS_GREEN)) {
                     label.setForeground(LIGHT_TEXT);
                 }
+            } else if (c instanceof JButton) {
+                flattenButton((JButton) c);
             }
         }
+    }
+
+    /**
+     * Strips the Look-and-Feel's default raised/gradient chrome off a button
+     * and replaces it with a flat, solid-color look (flat background, no
+     * bevel, no focus ring) that matches the app's navy theme. Applied
+     * automatically to every button on every screen via applyNavyTheme, so
+     * individual build*Screen() methods don't need to style buttons by hand.
+     */
+    private static void flattenButton(JButton button) {
+        button.setUI(new javax.swing.plaf.basic.BasicButtonUI());
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
+        button.setBorderPainted(false);
+        button.setFocusPainted(false);
+        button.setBackground(BUTTON_FLAT_BG);
+        button.setForeground(NAVY_BLUE);
+        button.setFont(button.getFont().deriveFont(Font.BOLD));
+        button.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
+        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+    }
+
+    /**
+     * Makes pressing Enter anywhere on a screen click that screen's primary
+     * button, the same as clicking it with the mouse.
+     * WHEN_ANCESTOR_OF_FOCUSED_COMPONENT scopes this to only fire while a
+     * component inside THIS panel has focus, so it won't interfere with
+     * Enter on other screens.
+     */
+    private static void bindEnterToButton(JPanel panel, JButton button) {
+        panel.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .put(KeyStroke.getKeyStroke("ENTER"), "primaryEnterAction");
+        panel.getActionMap().put("primaryEnterAction", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                button.doClick();
+            }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -746,17 +789,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         // Pressing Enter while focus is anywhere on the login screen (email
         // field, PIN field, etc.) clicks the Login button, same as clicking
-        // it with the mouse. WHEN_ANCESTOR_OF_FOCUSED_COMPONENT scopes this
-        // to only fire while a component inside THIS panel has focus, so it
-        // won't interfere with Enter on other screens (Register, etc.).
-        panel.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
-                .put(KeyStroke.getKeyStroke("ENTER"), "loginOnEnter");
-        panel.getActionMap().put("loginOnEnter", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                loginButton.doClick();
-            }
-        });
+        // it with the mouse.
+        bindEnterToButton(panel, loginButton);
 
         return wrapWithHeader(panel);
     }
@@ -873,6 +907,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
             cardLayout.show(mainPanel, LOGIN_SCREEN);
         });
 
+        bindEnterToButton(panel, registerButton);
+
         return wrapWithHeader(panel);
     }
 
@@ -933,6 +969,12 @@ public class EagleCashOnlineBankingApp extends JFrame {
         depositButton.addActionListener(e -> {
             Double amount = parseAmount(amountField.getText(), messageLabel);
             if (amount == null) return;
+
+            int choice = JOptionPane.showConfirmDialog(panel,
+                    "Deposit " + CURRENCY_SYMBOL + String.format("%.2f", amount) + "?",
+                    "Confirm Deposit", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (choice != JOptionPane.YES_OPTION) return;
+
             try {
                 double newBalance = currentUser.balance + amount;
                 DatabaseHelper.updateBalance(currentUser.id, newBalance);
@@ -956,6 +998,12 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 messageLabel.setText("Insufficient balance.");
                 return;
             }
+
+            int choice = JOptionPane.showConfirmDialog(panel,
+                    "Withdraw " + CURRENCY_SYMBOL + String.format("%.2f", amount) + "?",
+                    "Confirm Withdrawal", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (choice != JOptionPane.YES_OPTION) return;
+
             try {
                 double newBalance = currentUser.balance - amount;
                 DatabaseHelper.updateBalance(currentUser.id, newBalance);
@@ -1016,6 +1064,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
         panel.add(title, BorderLayout.NORTH);
         panel.add(scrollPane, BorderLayout.CENTER);
         panel.add(backButton, BorderLayout.SOUTH);
+
+        bindEnterToButton(panel, backButton);
 
         return wrapWithHeader(panel);
     }
@@ -1102,6 +1152,12 @@ public class EagleCashOnlineBankingApp extends JFrame {
             Double amount = parseAmount(transferAmountField.getText(), transferMessageLabel);
             if (amount == null) return;
 
+            int choice = JOptionPane.showConfirmDialog(panel,
+                    "Transfer " + CURRENCY_SYMBOL + String.format("%.2f", amount)
+                            + " to " + recipientIdentifier + "?",
+                    "Confirm Transfer", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (choice != JOptionPane.YES_OPTION) return;
+
             try {
                 // DatabaseHelper.transferFunds does the recipient lookup (by
                 // email or mobile number), the balance check, both balance
@@ -1127,6 +1183,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
             transferMessageLabel.setText(" ");
             cardLayout.show(mainPanel, DASHBOARD_SCREEN);
         });
+
+        bindEnterToButton(panel, sendButton);
 
         return wrapWithHeader(panel);
     }
@@ -1209,6 +1267,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
             cardLayout.show(mainPanel, LOGIN_SCREEN);
         });
 
+        bindEnterToButton(panel, sendButton);
+
         return wrapWithHeader(panel);
     }
 
@@ -1287,6 +1347,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
             forgotOtpMessageLabel.setText(" ");
             cardLayout.show(mainPanel, FORGOT_EMAIL_SCREEN);
         });
+
+        bindEnterToButton(panel, verifyButton);
 
         return wrapWithHeader(panel);
     }
@@ -1370,6 +1432,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
             forgotResetMessageLabel.setText(" ");
             cardLayout.show(mainPanel, LOGIN_SCREEN);
         });
+
+        bindEnterToButton(panel, resetButton);
 
         return wrapWithHeader(panel);
     }
