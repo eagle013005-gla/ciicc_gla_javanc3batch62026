@@ -1,14 +1,20 @@
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.File;
 import java.sql.*;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import javax.imageio.ImageIO;
 
@@ -52,6 +58,27 @@ public class EagleCashOnlineBankingApp extends JFrame {
     private final CardLayout cardLayout = new CardLayout();
     private final JPanel mainPanel = new JPanel(cardLayout);
 
+    // Maps each screen name to the field that should receive the text cursor
+    // as soon as that screen is shown (e.g. the email field on Login). Filled
+    // in by each build*Screen() method as it creates its fields.
+    private final Map<String, JComponent> firstFieldByScreen = new HashMap<>();
+
+    /**
+     * Switches to the given screen and puts the text cursor in that screen's
+     * first field, so you can start typing immediately without clicking into
+     * a field first. Used everywhere instead of calling cardLayout.show()
+     * directly, so this behavior is automatic and consistent on every screen.
+     */
+    private void showScreen(String screenName) {
+        cardLayout.show(mainPanel, screenName);
+        JComponent firstField = firstFieldByScreen.get(screenName);
+        if (firstField != null) {
+            // invokeLater lets the card fully become visible first, so the
+            // focus request isn't lost due to timing with the layout swap.
+            SwingUtilities.invokeLater(firstField::requestFocusInWindow);
+        }
+    }
+
     // Screen name constants
     private static final String LOGIN_SCREEN = "LOGIN";
     private static final String REGISTER_SCREEN = "REGISTER";
@@ -61,6 +88,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
     private static final String FORGOT_EMAIL_SCREEN = "FORGOT_EMAIL";
     private static final String FORGOT_OTP_SCREEN = "FORGOT_OTP";
     private static final String FORGOT_RESET_SCREEN = "FORGOT_RESET";
+    private static final String ADMIN_LOGIN_SCREEN = "ADMIN_LOGIN";
+    private static final String ADMIN_DASHBOARD_SCREEN = "ADMIN_DASHBOARD";
 
     private JLabel balanceLabel;
     private JLabel welcomeLabel;
@@ -81,6 +110,16 @@ public class EagleCashOnlineBankingApp extends JFrame {
     private JPasswordField forgotConfirmPinField;
     private JLabel forgotResetMessageLabel;
 
+    // Admin monitoring screens
+    private JLabel adminUserCountLabel;
+    private DefaultListModel<String> adminUserListModel;
+    private JLabel adminLoginMessageLabel;
+    private JTextField adminUsernameField;
+    // Keeps the same order as adminUserListModel, so adminUsersCache.get(i)
+    // is always the User behind row i - used to look up whose transactions
+    // to show when a row in the admin list is double-clicked.
+    private final List<User> adminUsersCache = new ArrayList<>();
+
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a");
 
@@ -99,10 +138,25 @@ public class EagleCashOnlineBankingApp extends JFrame {
     // navy button text readable, distinct enough to stand out from the navy panels.
     private static final Color BUTTON_FLAT_BG = new Color(214, 224, 240);
 
+    // ---- Admin account ----
+    // A fixed username/password, separate from the users table entirely -
+    // the admin isn't a bank customer, just whoever monitors the system.
+    //
+    // DEMO ONLY: a hardcoded plaintext password is NOT how you'd do this in
+    // a real production app (you'd store a hashed password in its own table,
+    // same as customer PINs ideally should be too). This keeps the school
+    // project simple, but change these before showing this to anyone else,
+    // and don't reuse this pattern for anything with real money or data.
+    private static final String ADMIN_USERNAME = "admin";
+    private static final String ADMIN_PASSWORD = "admin123";
+
     public EagleCashOnlineBankingApp() {
         super("EagleCash Online Banking App");
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(460, 520);
+        // DO_NOTHING_ON_CLOSE hands control of the (x) button entirely to the
+        // windowClosing() handler below, which asks for confirmation before the
+        // app actually exits - on whatever screen happens to be showing.
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        setSize(460, 560);
         setLocationRelativeTo(null);
         setResizable(false);
 
@@ -123,9 +177,46 @@ public class EagleCashOnlineBankingApp extends JFrame {
         mainPanel.add(buildForgotEmailScreen(), FORGOT_EMAIL_SCREEN);
         mainPanel.add(buildForgotOtpScreen(), FORGOT_OTP_SCREEN);
         mainPanel.add(buildForgotResetScreen(), FORGOT_RESET_SCREEN);
+        mainPanel.add(buildAdminLoginScreen(), ADMIN_LOGIN_SCREEN);
+        mainPanel.add(buildAdminDashboardScreen(), ADMIN_DASHBOARD_SCREEN);
 
         add(mainPanel);
-        cardLayout.show(mainPanel, LOGIN_SCREEN);
+        showScreen(LOGIN_SCREEN);
+
+        // A focus request made before the window is actually showing on
+        // screen (which is the case for showScreen() above, since this
+        // still runs inside the constructor) can silently be ignored by
+        // Swing. windowOpened() fires once the window genuinely appears,
+        // so this guarantees the very first field on launch gets focus too -
+        // every screen reached afterward is already handled by showScreen().
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowOpened(WindowEvent e) {
+                JComponent firstField = firstFieldByScreen.get(LOGIN_SCREEN);
+                if (firstField != null) {
+                    firstField.requestFocusInWindow();
+                }
+            }
+
+            // Fires whenever the user clicks the window's (x) close button,
+            // regardless of which screen is currently showing. Asking here -
+            // in one place - covers every screen automatically.
+            @Override
+            public void windowClosing(WindowEvent e) {
+                int choice = JOptionPane.showConfirmDialog(
+                        EagleCashOnlineBankingApp.this,
+                        "Are you sure you want to exit EagleCash?",
+                        "Confirm Exit",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.QUESTION_MESSAGE);
+                if (choice == JOptionPane.YES_OPTION) {
+                    dispose();
+                    System.exit(0);
+                }
+                // NO (or closing the confirm dialog itself) simply does
+                // nothing further, leaving the app open and untouched.
+            }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -330,6 +421,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         double amount;
         String timestamp; // stored as ISO text in the DB
         String targetEmail; // the other party's email, only set for transfers
+        String targetMobileNumber; // the other party's mobile number, only set for transfers (may be null if they have none on file)
 
         @Override
         public String toString() {
@@ -342,16 +434,39 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
             String sign = (type.equals("Deposit") || type.equals("Transfer Received")) ? "+" : "-";
 
-            String label = type;
-            if ("Transfer Sent".equals(type) && targetEmail != null) {
-                label = "Transfer to " + targetEmail;
-            } else if ("Transfer Received".equals(type) && targetEmail != null) {
-                label = "Transfer from " + targetEmail;
+            // The other party's contact info, shown together as "email / mobile"
+            // when both are on file, or whichever one is available.
+            String contact = targetEmail;
+            if (targetMobileNumber != null && !targetMobileNumber.isEmpty()) {
+                contact = (contact == null || contact.isEmpty())
+                        ? targetMobileNumber
+                        : contact + " / " + targetMobileNumber;
             }
 
-            return String.format("%s   %s%s%.2f   %s", displayTime, sign, CURRENCY_SYMBOL, amount, label);
+            String label = type;
+            if ("Transfer Sent".equals(type) && contact != null) {
+                label = "Transfer to " + contact;
+            } else if ("Transfer Received".equals(type) && contact != null) {
+                label = "Transfer from " + contact;
+            }
+
+            String amountText = sign + CURRENCY_SYMBOL + String.format("%.2f", amount);
+
+            // Fixed-width columns (matches HISTORY_COLUMN_HEADER below) so the
+            // list lines up neatly under the header row in the Monospaced font.
+            return String.format("%-22s %-12s %s", displayTime, amountText, label);
         }
     }
+
+    // Header row shown above the transaction history list - column widths
+    // must match the %-22s / %-12s spacing used in Transaction.toString().
+    private static final String HISTORY_COLUMN_HEADER =
+            String.format("%-22s %-12s %s", "Date & Time", "Amount", "Description");
+
+    // Header row shown above the admin user list - column widths must match
+    // the "#%-4d %-20s %-28s %-14s %s%.2f" format used in refreshAdminDashboard().
+    private static final String ADMIN_COLUMN_HEADER =
+            String.format("%-5s %-20s %-28s %-14s %s", "ID", "Name", "Email", "Mobile", "Balance");
 
     // ------------------------------------------------------------------
     // DATABASE HELPER - all SQL lives here
@@ -408,6 +523,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                     "  amount REAL NOT NULL," +
                     "  timestamp TEXT NOT NULL," +
                     "  target_email TEXT," +
+                    "  target_mobile TEXT," +
                     "  FOREIGN KEY(user_id) REFERENCES users(id)" +
                     ")";
             try (Connection conn = connect();
@@ -431,6 +547,12 @@ public class EagleCashOnlineBankingApp extends JFrame {
             try (Connection conn = connect();
                  Statement stmt = conn.createStatement()) {
                 stmt.execute("ALTER TABLE transactions ADD COLUMN target_email TEXT");
+            } catch (SQLException alreadyExists) {
+                // Expected on every run after the first - the column is already there.
+            }
+            try (Connection conn = connect();
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN target_mobile TEXT");
             } catch (SQLException alreadyExists) {
                 // Expected on every run after the first - the column is already there.
             }
@@ -487,6 +609,43 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 ps.setString(4, pin);
                 ps.executeUpdate();
             }
+        }
+
+        // ---- Admin monitoring queries ----
+
+        /** Total number of registered accounts - the headline number on the Admin Dashboard. */
+        static int getUserCount() throws SQLException {
+            String sql = "SELECT COUNT(*) AS total FROM users";
+            try (Connection conn = connect();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+                rs.next();
+                return rs.getInt("total");
+            }
+        }
+
+        /**
+         * All registered users for the admin monitoring list. Deliberately
+         * does NOT select the pin column - admin can see who has registered
+         * and their balance, but never anyone's PIN.
+         */
+        static List<User> getAllUsers() throws SQLException {
+            String sql = "SELECT id, name, email, mobile_number, balance FROM users ORDER BY id";
+            List<User> results = new ArrayList<>();
+            try (Connection conn = connect();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+                while (rs.next()) {
+                    User u = new User();
+                    u.id = rs.getInt("id");
+                    u.name = rs.getString("name");
+                    u.email = rs.getString("email");
+                    u.mobileNumber = rs.getString("mobile_number");
+                    u.balance = rs.getDouble("balance");
+                    results.add(u);
+                }
+            }
+            return results;
         }
 
         /**
@@ -593,7 +752,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         }
 
         static List<Transaction> getHistory(int userId) throws SQLException {
-            String sql = "SELECT type, amount, timestamp, target_email FROM transactions " +
+            String sql = "SELECT type, amount, timestamp, target_email, target_mobile FROM transactions " +
                          "WHERE user_id = ? ORDER BY id DESC";
             List<Transaction> results = new ArrayList<>();
             try (Connection conn = connect();
@@ -606,6 +765,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                         t.amount = rs.getDouble("amount");
                         t.timestamp = rs.getString("timestamp");
                         t.targetEmail = rs.getString("target_email");
+                        t.targetMobileNumber = rs.getString("target_mobile");
                         results.add(t);
                     }
                 }
@@ -630,8 +790,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
                     double toBalance;
                     String toEmail; // the recipient's actual email, for the transaction log,
                                      // even if the sender typed in a mobile number instead
+                    String toMobile; // the recipient's mobile number on file (may be null)
                     try (PreparedStatement ps = conn.prepareStatement(
-                            "SELECT id, balance, email FROM users WHERE email = ? OR mobile_number = ?")) {
+                            "SELECT id, balance, email, mobile_number FROM users WHERE email = ? OR mobile_number = ?")) {
                         ps.setString(1, toIdentifier);
                         ps.setString(2, toIdentifier);
                         try (ResultSet rs = ps.executeQuery()) {
@@ -641,6 +802,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                             toUserId = rs.getInt("id");
                             toBalance = rs.getDouble("balance");
                             toEmail = rs.getString("email");
+                            toMobile = rs.getString("mobile_number");
                         }
                     }
 
@@ -649,12 +811,14 @@ public class EagleCashOnlineBankingApp extends JFrame {
                     }
 
                     double fromBalance;
+                    String fromMobile; // the sender's mobile number on file (may be null)
                     try (PreparedStatement ps = conn.prepareStatement(
-                            "SELECT balance FROM users WHERE id = ?")) {
+                            "SELECT balance, mobile_number FROM users WHERE id = ?")) {
                         ps.setInt(1, fromUserId);
                         try (ResultSet rs = ps.executeQuery()) {
                             rs.next();
                             fromBalance = rs.getDouble("balance");
+                            fromMobile = rs.getString("mobile_number");
                         }
                     }
                     if (amount > fromBalance) {
@@ -674,8 +838,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
                         ps.executeUpdate();
                     }
 
-                    String insertSql = "INSERT INTO transactions(user_id, type, amount, timestamp, target_email) " +
-                                        "VALUES (?, ?, ?, ?, ?)";
+                    String insertSql = "INSERT INTO transactions(user_id, type, amount, timestamp, target_email, target_mobile) " +
+                                        "VALUES (?, ?, ?, ?, ?, ?)";
                     String now = LocalDateTime.now().toString();
 
                     try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
@@ -684,6 +848,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                         ps.setDouble(3, amount);
                         ps.setString(4, now);
                         ps.setString(5, toEmail);
+                        ps.setString(6, toMobile);
                         ps.executeUpdate();
                     }
                     try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
@@ -692,6 +857,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                         ps.setDouble(3, amount);
                         ps.setString(4, now);
                         ps.setString(5, fromEmail);
+                        ps.setString(6, fromMobile);
                         ps.executeUpdate();
                     }
 
@@ -720,6 +886,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         JLabel emailLabel = new JLabel("Email or Mobile:");
         JTextField emailField = new JTextField(18);
+        firstFieldByScreen.put(LOGIN_SCREEN, emailField);
 
         JLabel pinLabel = new JLabel("PIN:");
         JPasswordField pinField = new JPasswordField(18);
@@ -727,6 +894,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         JButton loginButton = new JButton("Login");
         JButton goRegisterButton = new JButton("Create an account");
         JButton forgotPasswordButton = new JButton("Forgot Password?");
+        JButton adminLoginButton = new JButton("Admin Login");
 
         JLabel messageLabel = new JLabel(" ");
         messageLabel.setForeground(Color.RED);
@@ -751,6 +919,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
         panel.add(forgotPasswordButton, gbc);
 
         gbc.gridy = 6;
+        panel.add(adminLoginButton, gbc);
+
+        gbc.gridy = 7;
         panel.add(messageLabel, gbc);
 
         loginButton.addActionListener(e -> {
@@ -767,7 +938,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                     emailField.setText("");
                     pinField.setText("");
                     refreshDashboard();
-                    cardLayout.show(mainPanel, DASHBOARD_SCREEN);
+                    showScreen(DASHBOARD_SCREEN);
                 }
             } catch (SQLException ex) {
                 messageLabel.setText("Database error: " + ex.getMessage());
@@ -776,7 +947,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         goRegisterButton.addActionListener(e -> {
             messageLabel.setText(" ");
-            cardLayout.show(mainPanel, REGISTER_SCREEN);
+            showScreen(REGISTER_SCREEN);
         });
 
         forgotPasswordButton.addActionListener(e -> {
@@ -784,7 +955,15 @@ public class EagleCashOnlineBankingApp extends JFrame {
             forgotEmailField.setText("");
             forgotEmailMessageLabel.setForeground(Color.RED);
             forgotEmailMessageLabel.setText(" ");
-            cardLayout.show(mainPanel, FORGOT_EMAIL_SCREEN);
+            showScreen(FORGOT_EMAIL_SCREEN);
+        });
+
+        adminLoginButton.addActionListener(e -> {
+            messageLabel.setText(" ");
+            adminUsernameField.setText("");
+            adminLoginMessageLabel.setForeground(Color.RED);
+            adminLoginMessageLabel.setText(" ");
+            showScreen(ADMIN_LOGIN_SCREEN);
         });
 
         // Pressing Enter while focus is anywhere on the login screen (email
@@ -809,6 +988,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         JLabel nameLabel = new JLabel("Name:");
         JTextField nameField = new JTextField(18);
+        firstFieldByScreen.put(REGISTER_SCREEN, nameField);
 
         JLabel emailLabel = new JLabel("Email:");
         JTextField emailField = new JTextField(18);
@@ -894,7 +1074,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                         "Registration Successful", JOptionPane.INFORMATION_MESSAGE);
                 // showMessageDialog blocks until the user clicks OK, so this
                 // line only runs after they dismiss the popup.
-                cardLayout.show(mainPanel, LOGIN_SCREEN);
+                showScreen(LOGIN_SCREEN);
             } catch (SQLException ex) {
                 messageLabel.setForeground(Color.RED);
                 messageLabel.setText("Database error: " + ex.getMessage());
@@ -904,7 +1084,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         backButton.addActionListener(e -> {
             messageLabel.setForeground(Color.RED);
             messageLabel.setText(" ");
-            cardLayout.show(mainPanel, LOGIN_SCREEN);
+            showScreen(LOGIN_SCREEN);
         });
 
         bindEnterToButton(panel, registerButton);
@@ -928,6 +1108,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         balanceLabel.setFont(new Font("Tahoma", Font.PLAIN, 16));
 
         JTextField amountField = new JTextField(10);
+        firstFieldByScreen.put(DASHBOARD_SCREEN, amountField);
         JButton depositButton = new JButton("Deposit");
         JButton withdrawButton = new JButton("Withdraw");
         JButton transferButton = new JButton("Transfer Funds");
@@ -1024,12 +1205,12 @@ public class EagleCashOnlineBankingApp extends JFrame {
             transferAmountField.setText("");
             transferMessageLabel.setForeground(Color.RED);
             transferMessageLabel.setText(" ");
-            cardLayout.show(mainPanel, TRANSFER_SCREEN);
+            showScreen(TRANSFER_SCREEN);
         });
 
         historyButton.addActionListener(e -> {
             refreshHistoryList();
-            cardLayout.show(mainPanel, HISTORY_SCREEN);
+            showScreen(HISTORY_SCREEN);
         });
 
         logoutButton.addActionListener(e -> {
@@ -1037,7 +1218,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
             messageLabel.setForeground(Color.RED);
             messageLabel.setText(" ");
             amountField.setText("");
-            cardLayout.show(mainPanel, LOGIN_SCREEN);
+            showScreen(LOGIN_SCREEN);
         });
 
         return wrapWithHeader(panel);
@@ -1052,6 +1233,12 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         JLabel title = new JLabel("Transaction History", SwingConstants.CENTER);
         title.setFont(new Font("Tahoma", Font.BOLD, 18));
+        title.setForeground(LIGHT_TEXT);
+
+        JLabel columnHeader = new JLabel(HISTORY_COLUMN_HEADER);
+        columnHeader.setFont(new Font("Monospaced", Font.BOLD, 12));
+        columnHeader.setForeground(LIGHT_TEXT);
+        columnHeader.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 0));
 
         historyListModel = new DefaultListModel<>();
         JList<String> historyList = new JList<>(historyListModel);
@@ -1059,9 +1246,14 @@ public class EagleCashOnlineBankingApp extends JFrame {
         JScrollPane scrollPane = new JScrollPane(historyList);
 
         JButton backButton = new JButton("Back to Dashboard");
-        backButton.addActionListener(e -> cardLayout.show(mainPanel, DASHBOARD_SCREEN));
+        backButton.addActionListener(e -> showScreen(DASHBOARD_SCREEN));
 
-        panel.add(title, BorderLayout.NORTH);
+        JPanel topPanel = new JPanel(new BorderLayout());
+        topPanel.setOpaque(false);
+        topPanel.add(title, BorderLayout.NORTH);
+        topPanel.add(columnHeader, BorderLayout.SOUTH);
+
+        panel.add(topPanel, BorderLayout.NORTH);
         panel.add(scrollPane, BorderLayout.CENTER);
         panel.add(backButton, BorderLayout.SOUTH);
 
@@ -1103,6 +1295,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         JLabel emailLabel = new JLabel("Recipient Email or Mobile:");
         transferEmailField = new JTextField(18);
+        firstFieldByScreen.put(TRANSFER_SCREEN, transferEmailField);
 
         JLabel amountLabel = new JLabel("Amount:");
         transferAmountField = new JTextField(18);
@@ -1181,7 +1374,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         backButton.addActionListener(e -> {
             transferMessageLabel.setForeground(Color.RED);
             transferMessageLabel.setText(" ");
-            cardLayout.show(mainPanel, DASHBOARD_SCREEN);
+            showScreen(DASHBOARD_SCREEN);
         });
 
         bindEnterToButton(panel, sendButton);
@@ -1203,6 +1396,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         JLabel emailLabel = new JLabel("Registered Email or Mobile:");
         forgotEmailField = new JTextField(18);
+        firstFieldByScreen.put(FORGOT_EMAIL_SCREEN, forgotEmailField);
 
         JButton sendButton = new JButton("Send OTP");
         JButton backButton = new JButton("Back to Login");
@@ -1254,7 +1448,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 forgotOtpField.setText("");
                 forgotOtpMessageLabel.setForeground(Color.RED);
                 forgotOtpMessageLabel.setText(" ");
-                cardLayout.show(mainPanel, FORGOT_OTP_SCREEN);
+                showScreen(FORGOT_OTP_SCREEN);
             } catch (SQLException ex) {
                 forgotEmailMessageLabel.setForeground(Color.RED);
                 forgotEmailMessageLabel.setText("Database error: " + ex.getMessage());
@@ -1264,7 +1458,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         backButton.addActionListener(e -> {
             forgotEmailMessageLabel.setForeground(Color.RED);
             forgotEmailMessageLabel.setText(" ");
-            cardLayout.show(mainPanel, LOGIN_SCREEN);
+            showScreen(LOGIN_SCREEN);
         });
 
         bindEnterToButton(panel, sendButton);
@@ -1290,6 +1484,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         JLabel otpLabel = new JLabel("OTP Code:");
         forgotOtpField = new JTextField(18);
+        firstFieldByScreen.put(FORGOT_OTP_SCREEN, forgotOtpField);
 
         JButton verifyButton = new JButton("Verify OTP");
         JButton backButton = new JButton("Back");
@@ -1335,7 +1530,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 forgotConfirmPinField.setText("");
                 forgotResetMessageLabel.setForeground(Color.RED);
                 forgotResetMessageLabel.setText(" ");
-                cardLayout.show(mainPanel, FORGOT_RESET_SCREEN);
+                showScreen(FORGOT_RESET_SCREEN);
             } catch (SQLException ex) {
                 forgotOtpMessageLabel.setForeground(Color.RED);
                 forgotOtpMessageLabel.setText("Database error: " + ex.getMessage());
@@ -1345,7 +1540,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         backButton.addActionListener(e -> {
             forgotOtpMessageLabel.setForeground(Color.RED);
             forgotOtpMessageLabel.setText(" ");
-            cardLayout.show(mainPanel, FORGOT_EMAIL_SCREEN);
+            showScreen(FORGOT_EMAIL_SCREEN);
         });
 
         bindEnterToButton(panel, verifyButton);
@@ -1367,6 +1562,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         JLabel newPinLabel = new JLabel("New PIN (4+ digits):");
         forgotNewPinField = new JPasswordField(18);
+        firstFieldByScreen.put(FORGOT_RESET_SCREEN, forgotNewPinField);
 
         JLabel confirmPinLabel = new JLabel("Confirm PIN:");
         forgotConfirmPinField = new JPasswordField(18);
@@ -1420,7 +1616,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                 forgotConfirmPinField.setText("");
                 forgotResetMessageLabel.setForeground(Color.RED);
                 forgotResetMessageLabel.setText(" ");
-                cardLayout.show(mainPanel, LOGIN_SCREEN);
+                showScreen(LOGIN_SCREEN);
             } catch (SQLException ex) {
                 forgotResetMessageLabel.setForeground(Color.RED);
                 forgotResetMessageLabel.setText("Database error: " + ex.getMessage());
@@ -1430,12 +1626,229 @@ public class EagleCashOnlineBankingApp extends JFrame {
         cancelButton.addActionListener(e -> {
             forgotResetMessageLabel.setForeground(Color.RED);
             forgotResetMessageLabel.setText(" ");
-            cardLayout.show(mainPanel, LOGIN_SCREEN);
+            showScreen(LOGIN_SCREEN);
         });
 
         bindEnterToButton(panel, resetButton);
 
         return wrapWithHeader(panel);
+    }
+
+    // ------------------------------------------------------------------
+    // ADMIN LOGIN SCREEN
+    // ------------------------------------------------------------------
+    private JPanel buildAdminLoginScreen() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JLabel title = new JLabel("Admin Login");
+        title.setFont(new Font("Tahoma", Font.BOLD, 20));
+
+        JLabel usernameLabel = new JLabel("Username:");
+        adminUsernameField = new JTextField(18);
+        firstFieldByScreen.put(ADMIN_LOGIN_SCREEN, adminUsernameField);
+
+        JLabel passwordLabel = new JLabel("Password:");
+        JPasswordField adminPasswordField = new JPasswordField(18);
+
+        JButton loginButton = new JButton("Login");
+        JButton backButton = new JButton("Back to Login");
+
+        adminLoginMessageLabel = new JLabel(" ");
+        adminLoginMessageLabel.setForeground(Color.RED);
+
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2;
+        panel.add(title, gbc);
+
+        gbc.gridwidth = 1;
+        gbc.gridy = 1; gbc.gridx = 0; panel.add(usernameLabel, gbc);
+        gbc.gridx = 1; panel.add(adminUsernameField, gbc);
+
+        gbc.gridy = 2; gbc.gridx = 0; panel.add(passwordLabel, gbc);
+        gbc.gridx = 1; panel.add(adminPasswordField, gbc);
+
+        gbc.gridy = 3; gbc.gridx = 0; gbc.gridwidth = 2;
+        panel.add(loginButton, gbc);
+
+        gbc.gridy = 4;
+        panel.add(backButton, gbc);
+
+        gbc.gridy = 5;
+        panel.add(adminLoginMessageLabel, gbc);
+
+        loginButton.addActionListener(e -> {
+            String username = adminUsernameField.getText().trim();
+            String password = new String(adminPasswordField.getPassword());
+
+            if (username.equals(ADMIN_USERNAME) && password.equals(ADMIN_PASSWORD)) {
+                adminLoginMessageLabel.setForeground(Color.RED);
+                adminLoginMessageLabel.setText(" ");
+                adminUsernameField.setText("");
+                adminPasswordField.setText("");
+                refreshAdminDashboard();
+                showScreen(ADMIN_DASHBOARD_SCREEN);
+            } else {
+                adminLoginMessageLabel.setForeground(Color.RED);
+                adminLoginMessageLabel.setText("Incorrect admin username or password.");
+            }
+        });
+
+        backButton.addActionListener(e -> {
+            adminLoginMessageLabel.setForeground(Color.RED);
+            adminLoginMessageLabel.setText(" ");
+            showScreen(LOGIN_SCREEN);
+        });
+
+        bindEnterToButton(panel, loginButton);
+
+        return wrapWithHeader(panel);
+    }
+
+    // ------------------------------------------------------------------
+    // ADMIN DASHBOARD SCREEN - monitoring: how many users have registered,
+    // plus a list of every account for a closer look.
+    // ------------------------------------------------------------------
+    private JPanel buildAdminDashboardScreen() {
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+
+        JLabel title = new JLabel("Admin Dashboard", SwingConstants.CENTER);
+        title.setFont(new Font("Tahoma", Font.BOLD, 18));
+        title.setForeground(LIGHT_TEXT);
+
+        adminUserCountLabel = new JLabel("Total Registered Users: -", SwingConstants.CENTER);
+        adminUserCountLabel.setFont(new Font("Tahoma", Font.BOLD, 16));
+        adminUserCountLabel.setForeground(LIGHT_TEXT);
+
+        JLabel columnHeader = new JLabel(ADMIN_COLUMN_HEADER);
+        columnHeader.setFont(new Font("Monospaced", Font.BOLD, 12));
+        columnHeader.setForeground(LIGHT_TEXT);
+        columnHeader.setBorder(BorderFactory.createEmptyBorder(4, 4, 0, 0));
+
+        adminUserListModel = new DefaultListModel<>();
+        JList<String> adminUserList = new JList<>(adminUserListModel);
+        adminUserList.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        JScrollPane scrollPane = new JScrollPane(adminUserList);
+
+        // Double-click a row to view that user's transaction history.
+        adminUserList.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() != 2) return;
+                int index = adminUserList.locationToIndex(e.getPoint());
+                if (index < 0 || index >= adminUsersCache.size()) return;
+                showUserHistoryDialog(adminUsersCache.get(index));
+            }
+        });
+
+        JPanel topPanel = new JPanel(new BorderLayout(4, 4));
+        topPanel.setOpaque(false);
+        topPanel.add(title, BorderLayout.NORTH);
+        topPanel.add(adminUserCountLabel, BorderLayout.CENTER);
+        topPanel.add(columnHeader, BorderLayout.SOUTH);
+
+        JLabel hintLabel = new JLabel("Tip: double-click a user to view their transaction history.",
+                SwingConstants.CENTER);
+        hintLabel.setFont(new Font("Tahoma", Font.ITALIC, 11));
+        hintLabel.setForeground(LIGHT_TEXT);
+
+        JButton refreshButton = new JButton("Refresh");
+        JButton logoutButton = new JButton("Logout");
+        // These two buttons sit inside bottomPanel below, not directly inside
+        // this screen's panel, so applyNavyTheme's shallow pass over panel's
+        // direct children won't reach them - style them explicitly instead.
+        flattenButton(refreshButton);
+        flattenButton(logoutButton);
+
+        JPanel buttonRow = new JPanel(new GridLayout(1, 2, 8, 0));
+        buttonRow.setOpaque(false);
+        buttonRow.add(refreshButton);
+        buttonRow.add(logoutButton);
+
+        JPanel bottomPanel = new JPanel(new BorderLayout(0, 4));
+        bottomPanel.setOpaque(false);
+        bottomPanel.add(hintLabel, BorderLayout.NORTH);
+        bottomPanel.add(buttonRow, BorderLayout.SOUTH);
+
+        panel.add(topPanel, BorderLayout.NORTH);
+        panel.add(scrollPane, BorderLayout.CENTER);
+        panel.add(bottomPanel, BorderLayout.SOUTH);
+
+        refreshButton.addActionListener(e -> refreshAdminDashboard());
+
+        logoutButton.addActionListener(e -> showScreen(LOGIN_SCREEN));
+
+        bindEnterToButton(panel, refreshButton);
+
+        return wrapWithHeader(panel);
+    }
+
+    /** Reloads the registered-user count and the account list from the database. */
+    private void refreshAdminDashboard() {
+        try {
+            int count = DatabaseHelper.getUserCount();
+            adminUserCountLabel.setText("Total Registered Users: " + count);
+
+            List<User> users = DatabaseHelper.getAllUsers();
+            adminUserListModel.clear();
+            adminUsersCache.clear();
+            if (users.isEmpty()) {
+                adminUserListModel.addElement("No users registered yet.");
+            } else {
+                for (User u : users) {
+                    adminUserListModel.addElement(String.format("#%-4d %-20s %-28s %-14s %s%.2f",
+                            u.id, u.name, u.email,
+                            u.mobileNumber == null ? "-" : u.mobileNumber,
+                            CURRENCY_SYMBOL, u.balance));
+                    adminUsersCache.add(u);
+                }
+            }
+        } catch (SQLException ex) {
+            adminUserCountLabel.setText("Total Registered Users: (error)");
+            adminUserListModel.clear();
+            adminUsersCache.clear();
+            adminUserListModel.addElement("Could not load users: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * Opens a read-only popup listing every transaction for the given user -
+     * lets the admin double-click a row on the Admin Dashboard to look at
+     * that customer's transaction history without needing their PIN.
+     */
+    private void showUserHistoryDialog(User user) {
+        DefaultListModel<String> dialogListModel = new DefaultListModel<>();
+        try {
+            List<Transaction> history = DatabaseHelper.getHistory(user.id);
+            if (history.isEmpty()) {
+                dialogListModel.addElement("No transactions yet.");
+            } else {
+                for (Transaction t : history) {
+                    dialogListModel.addElement(t.toString());
+                }
+            }
+        } catch (SQLException ex) {
+            dialogListModel.addElement("Could not load history: " + ex.getMessage());
+        }
+
+        JLabel columnHeader = new JLabel(HISTORY_COLUMN_HEADER);
+        columnHeader.setFont(new Font("Monospaced", Font.BOLD, 12));
+        columnHeader.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 0));
+
+        JList<String> dialogList = new JList<>(dialogListModel);
+        dialogList.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        JScrollPane dialogScrollPane = new JScrollPane(dialogList);
+        dialogScrollPane.setPreferredSize(new Dimension(480, 260));
+
+        JPanel dialogPanel = new JPanel(new BorderLayout(4, 4));
+        dialogPanel.add(columnHeader, BorderLayout.NORTH);
+        dialogPanel.add(dialogScrollPane, BorderLayout.CENTER);
+
+        JOptionPane.showMessageDialog(this, dialogPanel,
+                "Transaction History - " + user.name + " (" + user.email + ")",
+                JOptionPane.PLAIN_MESSAGE);
     }
 
     /** Parses the amount field, showing an error message if it's invalid. Returns null on failure. */
