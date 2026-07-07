@@ -69,8 +69,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
     private JTextField transferAmountField;
     private JLabel transferMessageLabel;
 
-    // Forgot Password flow - tracks which email is going through the reset
-    // process as the user moves between the three forgot-password screens.
+    // Forgot Password flow - tracks which account (identified by email or
+    // mobile number) is going through the reset process as the user moves
+    // between the three forgot-password screens.
     private String forgotEmail;
     private JTextField forgotEmailField;
     private JLabel forgotEmailMessageLabel;
@@ -276,6 +277,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         int id;
         String name;
         String email;
+        String mobileNumber;
         String pin;
         double balance;
     }
@@ -349,6 +351,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
                     "  id INTEGER PRIMARY KEY AUTOINCREMENT," +
                     "  name TEXT NOT NULL," +
                     "  email TEXT NOT NULL UNIQUE," +
+                    "  mobile_number TEXT," +
                     "  pin TEXT NOT NULL," +
                     "  balance REAL NOT NULL DEFAULT 0," +
                     "  otp TEXT," +
@@ -400,6 +403,12 @@ public class EagleCashOnlineBankingApp extends JFrame {
             } catch (SQLException alreadyExists) {
                 // Expected on every run after the first - the column is already there.
             }
+            try (Connection conn = connect();
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute("ALTER TABLE users ADD COLUMN mobile_number TEXT");
+            } catch (SQLException alreadyExists) {
+                // Expected on every run after the first - the column is already there.
+            }
         }
 
         static boolean emailExists(String email) throws SQLException {
@@ -413,20 +422,34 @@ public class EagleCashOnlineBankingApp extends JFrame {
             }
         }
 
-        static void insertUser(String name, String email, String pin) throws SQLException {
-            String sql = "INSERT INTO users(name, email, pin, balance) VALUES (?, ?, ?, 0)";
+        /** Used during registration so two accounts can't share the same mobile number. */
+        static boolean mobileNumberExists(String mobileNumber) throws SQLException {
+            String sql = "SELECT 1 FROM users WHERE mobile_number = ?";
+            try (Connection conn = connect();
+                 PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, mobileNumber);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next();
+                }
+            }
+        }
+
+        static void insertUser(String name, String email, String mobileNumber, String pin) throws SQLException {
+            String sql = "INSERT INTO users(name, email, mobile_number, pin, balance) VALUES (?, ?, ?, ?, 0)";
             try (Connection conn = connect();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, name);
                 ps.setString(2, email);
-                ps.setString(3, pin);
+                ps.setString(3, mobileNumber);
+                ps.setString(4, pin);
                 ps.executeUpdate();
             }
         }
 
         /**
-         * Generates a 6-digit OTP, stores it against the given email with a
-         * 5-minute expiry, and returns it so the UI can display it.
+         * Generates a 6-digit OTP, stores it against the matching account (looked
+         * up by email OR mobile number) with a 5-minute expiry, and returns it so
+         * the UI can display it.
          *
          * NOTE: A real production app would email this code instead of
          * displaying it on screen (that's what the EagleCash design doc calls
@@ -434,26 +457,28 @@ public class EagleCashOnlineBankingApp extends JFrame {
          * which is a lot of extra setup for a school project running on a
          * lab computer, so this demo version shows the code directly instead.
          */
-        static String generateOtp(String email) throws SQLException {
+        static String generateOtp(String identifier) throws SQLException {
             String otp = String.format("%06d", new java.util.Random().nextInt(1_000_000));
             String expiry = LocalDateTime.now().plusMinutes(5).toString();
-            String sql = "UPDATE users SET otp = ?, otp_expiry = ? WHERE email = ?";
+            String sql = "UPDATE users SET otp = ?, otp_expiry = ? WHERE email = ? OR mobile_number = ?";
             try (Connection conn = connect();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, otp);
                 ps.setString(2, expiry);
-                ps.setString(3, email);
+                ps.setString(3, identifier);
+                ps.setString(4, identifier);
                 ps.executeUpdate();
             }
             return otp;
         }
 
         /** Returns true if the entered OTP matches the stored one and hasn't expired yet. */
-        static boolean verifyOtp(String email, String enteredOtp) throws SQLException {
-            String sql = "SELECT otp, otp_expiry FROM users WHERE email = ?";
+        static boolean verifyOtp(String identifier, String enteredOtp) throws SQLException {
+            String sql = "SELECT otp, otp_expiry FROM users WHERE email = ? OR mobile_number = ?";
             try (Connection conn = connect();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, email);
+                ps.setString(1, identifier);
+                ps.setString(2, identifier);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) return false;
                     String storedOtp = rs.getString("otp");
@@ -467,30 +492,33 @@ public class EagleCashOnlineBankingApp extends JFrame {
         }
 
         /** Sets a new PIN and clears out the used OTP so it can't be replayed. */
-        static void resetPin(String email, String newPin) throws SQLException {
-            String sql = "UPDATE users SET pin = ?, otp = NULL, otp_expiry = NULL WHERE email = ?";
+        static void resetPin(String identifier, String newPin) throws SQLException {
+            String sql = "UPDATE users SET pin = ?, otp = NULL, otp_expiry = NULL WHERE email = ? OR mobile_number = ?";
             try (Connection conn = connect();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, newPin);
-                ps.setString(2, email);
+                ps.setString(2, identifier);
+                ps.setString(3, identifier);
                 ps.executeUpdate();
             }
         }
 
-        /** Returns the matching user, or null if the email/PIN combination doesn't match. */
-        static User login(String email, String pin) throws SQLException {
-            String sql = "SELECT id, name, email, pin, balance FROM users WHERE email = ?";
+        /** Returns the matching user, or null if the email-or-mobile/PIN combination doesn't match. */
+        static User login(String identifier, String pin) throws SQLException {
+            String sql = "SELECT id, name, email, mobile_number, pin, balance FROM users WHERE email = ? OR mobile_number = ?";
             try (Connection conn = connect();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, email);
+                ps.setString(1, identifier);
+                ps.setString(2, identifier);
                 try (ResultSet rs = ps.executeQuery()) {
-                    if (!rs.next()) return null;           // no account with that email
+                    if (!rs.next()) return null;           // no account with that email/mobile
                     if (!rs.getString("pin").equals(pin)) return null; // wrong PIN
 
                     User user = new User();
                     user.id = rs.getInt("id");
                     user.name = rs.getString("name");
                     user.email = rs.getString("email");
+                    user.mobileNumber = rs.getString("mobile_number");
                     user.pin = rs.getString("pin");
                     user.balance = rs.getDouble("balance");
                     return user;
@@ -547,23 +575,29 @@ public class EagleCashOnlineBankingApp extends JFrame {
          * transaction: both balance updates and both transaction log entries
          * either all succeed together or all get rolled back together, so
          * money can never "disappear" partway through if something fails.
+         * The recipient can be identified by either their email or their
+         * mobile number - whichever the sender typed in.
          */
-        static void transferFunds(int fromUserId, String fromEmail, String toEmail, double amount)
+        static void transferFunds(int fromUserId, String fromEmail, String toIdentifier, double amount)
                 throws SQLException {
             try (Connection conn = connect()) {
                 conn.setAutoCommit(false); // start a manual transaction
                 try {
                     int toUserId;
                     double toBalance;
+                    String toEmail; // the recipient's actual email, for the transaction log,
+                                     // even if the sender typed in a mobile number instead
                     try (PreparedStatement ps = conn.prepareStatement(
-                            "SELECT id, balance FROM users WHERE email = ?")) {
-                        ps.setString(1, toEmail);
+                            "SELECT id, balance, email FROM users WHERE email = ? OR mobile_number = ?")) {
+                        ps.setString(1, toIdentifier);
+                        ps.setString(2, toIdentifier);
                         try (ResultSet rs = ps.executeQuery()) {
                             if (!rs.next()) {
-                                throw new SQLException("No account found with that recipient email.");
+                                throw new SQLException("No account found with that recipient email or mobile number.");
                             }
                             toUserId = rs.getInt("id");
                             toBalance = rs.getDouble("balance");
+                            toEmail = rs.getString("email");
                         }
                     }
 
@@ -641,7 +675,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         JLabel title = new JLabel("Login");
         title.setFont(new Font("Tahoma", Font.BOLD, 20));
 
-        JLabel emailLabel = new JLabel("Email:");
+        JLabel emailLabel = new JLabel("Email or Mobile:");
         JTextField emailField = new JTextField(18);
 
         JLabel pinLabel = new JLabel("PIN:");
@@ -677,13 +711,13 @@ public class EagleCashOnlineBankingApp extends JFrame {
         panel.add(messageLabel, gbc);
 
         loginButton.addActionListener(e -> {
-            String email = emailField.getText().trim();
+            String identifier = emailField.getText().trim();
             String pin = new String(pinField.getPassword());
 
             try {
-                User user = DatabaseHelper.login(email, pin);
+                User user = DatabaseHelper.login(identifier, pin);
                 if (user == null) {
-                    messageLabel.setText("Incorrect email or PIN.");
+                    messageLabel.setText("Incorrect email/mobile or PIN.");
                 } else {
                     currentUser = user;
                     messageLabel.setText(" ");
@@ -745,6 +779,9 @@ public class EagleCashOnlineBankingApp extends JFrame {
         JLabel emailLabel = new JLabel("Email:");
         JTextField emailField = new JTextField(18);
 
+        JLabel mobileLabel = new JLabel("Mobile Number:");
+        JTextField mobileField = new JTextField(18);
+
         JLabel pinLabel = new JLabel("PIN (4+ digits):");
         JPasswordField pinField = new JPasswordField(18);
 
@@ -764,29 +801,37 @@ public class EagleCashOnlineBankingApp extends JFrame {
         gbc.gridy = 2; gbc.gridx = 0; panel.add(emailLabel, gbc);
         gbc.gridx = 1; panel.add(emailField, gbc);
 
-        gbc.gridy = 3; gbc.gridx = 0; panel.add(pinLabel, gbc);
+        gbc.gridy = 3; gbc.gridx = 0; panel.add(mobileLabel, gbc);
+        gbc.gridx = 1; panel.add(mobileField, gbc);
+
+        gbc.gridy = 4; gbc.gridx = 0; panel.add(pinLabel, gbc);
         gbc.gridx = 1; panel.add(pinField, gbc);
 
-        gbc.gridy = 4; gbc.gridx = 0; gbc.gridwidth = 2;
+        gbc.gridy = 5; gbc.gridx = 0; gbc.gridwidth = 2;
         panel.add(registerButton, gbc);
 
-        gbc.gridy = 5;
+        gbc.gridy = 6;
         panel.add(backButton, gbc);
 
-        gbc.gridy = 6;
+        gbc.gridy = 7;
         panel.add(messageLabel, gbc);
 
         registerButton.addActionListener(e -> {
             String name = nameField.getText().trim();
             String email = emailField.getText().trim();
+            String mobileNumber = mobileField.getText().trim();
             String pin = new String(pinField.getPassword());
 
-            if (name.isEmpty() || email.isEmpty() || pin.isEmpty()) {
+            if (name.isEmpty() || email.isEmpty() || mobileNumber.isEmpty() || pin.isEmpty()) {
                 messageLabel.setText("Please fill in every field.");
                 return;
             }
             if (!email.contains("@") || !email.contains(".")) {
                 messageLabel.setText("Please enter a valid email.");
+                return;
+            }
+            if (!mobileNumber.matches("\\d{10,13}")) {
+                messageLabel.setText("Mobile number must be 10-13 digits.");
                 return;
             }
             if (!pin.matches("\\d{4,}")) {
@@ -799,12 +844,23 @@ public class EagleCashOnlineBankingApp extends JFrame {
                     messageLabel.setText("An account with that email already exists.");
                     return;
                 }
-                DatabaseHelper.insertUser(name, email, pin);
-                messageLabel.setForeground(SUCCESS_GREEN);
-                messageLabel.setText("Account created! You can log in now.");
+                if (DatabaseHelper.mobileNumberExists(mobileNumber)) {
+                    messageLabel.setText("An account with that mobile number already exists.");
+                    return;
+                }
+                DatabaseHelper.insertUser(name, email, mobileNumber, pin);
                 nameField.setText("");
                 emailField.setText("");
+                mobileField.setText("");
                 pinField.setText("");
+                messageLabel.setText(" ");
+
+                JOptionPane.showMessageDialog(panel,
+                        "Account created! You can log in now.",
+                        "Registration Successful", JOptionPane.INFORMATION_MESSAGE);
+                // showMessageDialog blocks until the user clicks OK, so this
+                // line only runs after they dismiss the popup.
+                cardLayout.show(mainPanel, LOGIN_SCREEN);
             } catch (SQLException ex) {
                 messageLabel.setForeground(Color.RED);
                 messageLabel.setText("Database error: " + ex.getMessage());
@@ -995,7 +1051,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         JLabel title = new JLabel("Transfer Funds");
         title.setFont(new Font("Tahoma", Font.BOLD, 20));
 
-        JLabel emailLabel = new JLabel("Recipient Email:");
+        JLabel emailLabel = new JLabel("Recipient Email or Mobile:");
         transferEmailField = new JTextField(18);
 
         JLabel amountLabel = new JLabel("Amount:");
@@ -1027,14 +1083,17 @@ public class EagleCashOnlineBankingApp extends JFrame {
         panel.add(transferMessageLabel, gbc);
 
         sendButton.addActionListener(e -> {
-            String recipientEmail = transferEmailField.getText().trim();
+            String recipientIdentifier = transferEmailField.getText().trim();
 
-            if (recipientEmail.isEmpty()) {
+            if (recipientIdentifier.isEmpty()) {
                 transferMessageLabel.setForeground(Color.RED);
-                transferMessageLabel.setText("Enter a recipient email.");
+                transferMessageLabel.setText("Enter a recipient email or mobile number.");
                 return;
             }
-            if (recipientEmail.equalsIgnoreCase(currentUser.email)) {
+            boolean isOwnEmail = recipientIdentifier.equalsIgnoreCase(currentUser.email);
+            boolean isOwnMobile = currentUser.mobileNumber != null
+                    && recipientIdentifier.equals(currentUser.mobileNumber);
+            if (isOwnEmail || isOwnMobile) {
                 transferMessageLabel.setForeground(Color.RED);
                 transferMessageLabel.setText("You can't transfer to your own account.");
                 return;
@@ -1044,15 +1103,16 @@ public class EagleCashOnlineBankingApp extends JFrame {
             if (amount == null) return;
 
             try {
-                // DatabaseHelper.transferFunds does the recipient lookup, the
-                // balance check, both balance updates, and both transaction
-                // log entries as one all-or-nothing database transaction.
-                DatabaseHelper.transferFunds(currentUser.id, currentUser.email, recipientEmail, amount);
+                // DatabaseHelper.transferFunds does the recipient lookup (by
+                // email or mobile number), the balance check, both balance
+                // updates, and both transaction log entries as one
+                // all-or-nothing database transaction.
+                DatabaseHelper.transferFunds(currentUser.id, currentUser.email, recipientIdentifier, amount);
                 currentUser.balance -= amount;
 
                 transferMessageLabel.setForeground(SUCCESS_GREEN);
                 transferMessageLabel.setText("Transferred " + CURRENCY_SYMBOL
-                        + String.format("%.2f", amount) + " to " + recipientEmail);
+                        + String.format("%.2f", amount) + " to " + recipientIdentifier);
                 transferEmailField.setText("");
                 transferAmountField.setText("");
                 refreshDashboard();
@@ -1083,7 +1143,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         JLabel title = new JLabel("Forgot Password");
         title.setFont(new Font("Tahoma", Font.BOLD, 20));
 
-        JLabel emailLabel = new JLabel("Registered Email:");
+        JLabel emailLabel = new JLabel("Registered Email or Mobile:");
         forgotEmailField = new JTextField(18);
 
         JButton sendButton = new JButton("Send OTP");
@@ -1109,20 +1169,20 @@ public class EagleCashOnlineBankingApp extends JFrame {
         panel.add(forgotEmailMessageLabel, gbc);
 
         sendButton.addActionListener(e -> {
-            String email = forgotEmailField.getText().trim();
-            if (email.isEmpty()) {
+            String identifier = forgotEmailField.getText().trim();
+            if (identifier.isEmpty()) {
                 forgotEmailMessageLabel.setForeground(Color.RED);
-                forgotEmailMessageLabel.setText("Enter your registered email.");
+                forgotEmailMessageLabel.setText("Enter your registered email or mobile number.");
                 return;
             }
             try {
-                if (!DatabaseHelper.emailExists(email)) {
+                if (!DatabaseHelper.emailExists(identifier) && !DatabaseHelper.mobileNumberExists(identifier)) {
                     forgotEmailMessageLabel.setForeground(Color.RED);
-                    forgotEmailMessageLabel.setText("No account found with that email.");
+                    forgotEmailMessageLabel.setText("No account found with that email or mobile number.");
                     return;
                 }
-                String otp = DatabaseHelper.generateOtp(email);
-                forgotEmail = email;
+                String otp = DatabaseHelper.generateOtp(identifier);
+                forgotEmail = identifier;
 
                 // DEMO NOTE: a real production app would email this code
                 // instead of showing it here (see the Security Considerations
