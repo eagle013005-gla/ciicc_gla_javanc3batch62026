@@ -243,11 +243,17 @@ public class EagleCashOnlineBankingApp extends JFrame {
     }
 
     /**
-     * Paints a screen's content panel navy blue and switches any plain-black
-     * JLabel text to a light color so it stays readable on the dark
-     * background. Labels that were already given a custom color (e.g. the
-     * red/green status messages) are left alone, since those already have
-     * enough contrast against navy.
+     * Paints a screen's content panel navy blue and switches JLabel text to a
+     * light color so it stays readable on the dark background. Labels that
+     * were already given a custom color (the red/green status messages) are
+     * left alone, since those already have enough contrast against navy.
+     *
+     * NOTE: this checks against RED/SUCCESS_GREEN rather than "is it black"
+     * on purpose - the Look-and-Feel's actual default label color isn't
+     * necessarily pure Color.BLACK (it can be a muted dark gray), so
+     * checking equality against black missed labels and left them low
+     * contrast on navy. Checking against the two colors we deliberately set
+     * elsewhere is more reliable.
      */
     private void applyNavyTheme(JPanel content) {
         content.setBackground(NAVY_BLUE);
@@ -255,7 +261,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
         for (Component c : content.getComponents()) {
             if (c instanceof JLabel) {
                 JLabel label = (JLabel) c;
-                if (label.getForeground().equals(Color.BLACK)) {
+                Color fg = label.getForeground();
+                if (!fg.equals(Color.RED) && !fg.equals(SUCCESS_GREEN)) {
                     label.setForeground(LIGHT_TEXT);
                 }
             }
