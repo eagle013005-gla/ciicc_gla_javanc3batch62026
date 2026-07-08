@@ -156,7 +156,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         // windowClosing() handler below, which asks for confirmation before the
         // app actually exits - on whatever screen happens to be showing.
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
-        setSize(460, 560);
+        setSize(460, 530);
         setLocationRelativeTo(null);
         setResizable(false);
 
@@ -225,7 +225,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
     /** Filename of the logo image. Must sit in the same folder as this .java/.class file. */
     private static final String LOGO_FILENAME = "eagle_logo.png";
-    private static final int LOGO_HEIGHT = 56; // pixels; width is scaled to match the image's aspect ratio
+    private static final int LOGO_HEIGHT = 70; // pixels; width is scaled to match the image's aspect ratio
 
     private static Image cachedLogoImage;
     private static boolean loggedMissingLogo = false;
@@ -264,6 +264,22 @@ public class EagleCashOnlineBankingApp extends JFrame {
     private static final String CALLIGRAPHY_FONT = pickCalligraphyFont();
 
     /**
+Kingthings Christmas" (a downloaded decorative font) for the
+     * "EagleCash" title if it's installed on this machine, falling back to
+     * "Algerian" (bundled with Windows), then a bold serif look if neither
+     * is present - so the title still looks intentional either way.
+     */
+    private static String pickTitleFont() {
+        Set<String> available = new HashSet<>(Arrays.asList(
+                GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames()));
+        if (available.contains("Kingthings Christmas")) return "Kingthings Christmas";
+        if (available.contains("Algerian")) return "Algerian";
+        return Font.SERIF;
+    }
+
+    private static final String TITLE_FONT = pickTitleFont();
+
+    /**
      * Header shown at the top of every screen: the eagle logo sits directly
      * beside "EagleCash" and the tagline, and the whole group is centered
      * together in the header (not the logo pinned to one edge separately).
@@ -272,8 +288,8 @@ public class EagleCashOnlineBankingApp extends JFrame {
         // FlowLayout.CENTER groups the logo + text as a single unit and centers
         // that unit as a whole, so the image stays right next to the text no
         // matter how wide the window is.
-        JPanel header = new JPanel(new FlowLayout(FlowLayout.CENTER, 14, 6));
-        header.setBorder(BorderFactory.createEmptyBorder(20, 10, 6, 10));
+        JPanel header = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 6));
+        header.setBorder(BorderFactory.createEmptyBorder(60, 10, 6, 10));
         header.setBackground(NAVY_BLUE);
         header.setOpaque(true);
 
@@ -297,7 +313,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.Y_AXIS));
 
         JLabel appName = new JLabel("EagleCash");
-        appName.setFont(new Font("Tahoma", Font.BOLD, 20));
+        appName.setFont(new Font(TITLE_FONT, Font.BOLD, 40));
         appName.setAlignmentX(Component.CENTER_ALIGNMENT);
         appName.setForeground(LIGHT_TEXT);
 
@@ -325,15 +341,45 @@ public class EagleCashOnlineBankingApp extends JFrame {
         return header;
     }
 
-    /** Wraps a screen's content panel with the shared header along the top. */
+    /**
+     * Wraps a screen's content panel with the shared header along the top.
+     * The content stretches to fill the full window width - appropriate for
+     * screens with wide content like the Admin Dashboard's table or the
+     * Transaction History list.
+     */
     private JPanel wrapWithHeader(JPanel content) {
+        return wrapWithHeader(content, false);
+    }
+
+    /**
+     * Same as wrapWithHeader(content), but when fixedWidth is true, the
+     * content panel keeps its own natural (preferred) width and is centered
+     * in the window instead of stretching to fill it - used for simple forms
+     * (Login, Register, Transfer, etc.) so their fields and buttons don't
+     * end up awkwardly stretched out just because the window was widened to
+     * fit a wider screen elsewhere (like the Admin Dashboard's table).
+     */
+    private JPanel wrapWithHeader(JPanel content, boolean fixedWidth) {
         applyNavyTheme(content);
 
         JPanel wrapper = new JPanel(new BorderLayout());
         wrapper.setBackground(NAVY_BLUE);
         wrapper.setOpaque(true);
         wrapper.add(buildHeader(), BorderLayout.NORTH);
-        wrapper.add(content, BorderLayout.CENTER);
+
+        if (fixedWidth) {
+            // FlowLayout sizes its child to its own preferred width instead
+            // of stretching it, and centers it horizontally within whatever
+            // space is available - exactly what we want here.
+            JPanel centeringPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+            centeringPanel.setBackground(NAVY_BLUE);
+            centeringPanel.setOpaque(true);
+            centeringPanel.add(content);
+            wrapper.add(centeringPanel, BorderLayout.CENTER);
+        } else {
+            wrapper.add(content, BorderLayout.CENTER);
+        }
+
         return wrapper;
     }
 
@@ -384,6 +430,25 @@ public class EagleCashOnlineBankingApp extends JFrame {
         button.setFont(button.getFont().deriveFont(Font.BOLD));
         button.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+    }
+
+    /**
+     * Creates a clickable, hyperlink-styled label (underlined, light blue,
+     * hand cursor) for secondary actions - like "Forgot Password?" - that
+     * shouldn't compete visually with the screen's main button.
+     */
+    private static JLabel makeHyperlink(String text, Runnable onClick) {
+        JLabel link = new JLabel("<html><u>" + text + "</u></html>");
+        link.setForeground(new Color(140, 190, 255)); // light blue, readable on the navy background
+        link.setFont(new Font("Tahoma", Font.PLAIN, 13));
+        link.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        link.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                onClick.run();
+            }
+        });
+        return link;
     }
 
     /**
@@ -892,9 +957,6 @@ public class EagleCashOnlineBankingApp extends JFrame {
         JPasswordField pinField = new JPasswordField(18);
 
         JButton loginButton = new JButton("Login");
-        JButton goRegisterButton = new JButton("Create an account");
-        JButton forgotPasswordButton = new JButton("Forgot Password?");
-        JButton adminLoginButton = new JButton("Admin Login");
 
         JLabel messageLabel = new JLabel(" ");
         messageLabel.setForeground(Color.RED);
@@ -912,16 +974,43 @@ public class EagleCashOnlineBankingApp extends JFrame {
         gbc.gridy = 3; gbc.gridx = 0; gbc.gridwidth = 2;
         panel.add(loginButton, gbc);
 
+        // "Create an account" and "Forgot Password?" share one row as
+        // lightweight hyperlinks, instead of two more full-width buttons
+        // competing with Login for attention.
+        JLabel goRegisterLink = makeHyperlink("Create an account", () -> {
+            messageLabel.setText(" ");
+            showScreen(REGISTER_SCREEN);
+        });
+        JLabel forgotPasswordLink = makeHyperlink("Forgot Password?", () -> {
+            messageLabel.setText(" ");
+            forgotEmailField.setText("");
+            forgotEmailMessageLabel.setForeground(Color.RED);
+            forgotEmailMessageLabel.setText(" ");
+            showScreen(FORGOT_EMAIL_SCREEN);
+        });
+        JPanel secondaryLinksRow = new JPanel(new FlowLayout(FlowLayout.CENTER, 24, 0));
+        secondaryLinksRow.setOpaque(false);
+        secondaryLinksRow.add(goRegisterLink);
+        secondaryLinksRow.add(forgotPasswordLink);
+
         gbc.gridy = 4;
-        panel.add(goRegisterButton, gbc);
+        panel.add(secondaryLinksRow, gbc);
+
+        JLabel adminLoginLink = makeHyperlink("Admin Login", () -> {
+            messageLabel.setText(" ");
+            adminUsernameField.setText("");
+            adminLoginMessageLabel.setForeground(Color.RED);
+            adminLoginMessageLabel.setText(" ");
+            showScreen(ADMIN_LOGIN_SCREEN);
+        });
+        JPanel adminLinkRow = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        adminLinkRow.setOpaque(false);
+        adminLinkRow.add(adminLoginLink);
 
         gbc.gridy = 5;
-        panel.add(forgotPasswordButton, gbc);
+        panel.add(adminLinkRow, gbc);
 
         gbc.gridy = 6;
-        panel.add(adminLoginButton, gbc);
-
-        gbc.gridy = 7;
         panel.add(messageLabel, gbc);
 
         loginButton.addActionListener(e -> {
@@ -945,33 +1034,12 @@ public class EagleCashOnlineBankingApp extends JFrame {
             }
         });
 
-        goRegisterButton.addActionListener(e -> {
-            messageLabel.setText(" ");
-            showScreen(REGISTER_SCREEN);
-        });
-
-        forgotPasswordButton.addActionListener(e -> {
-            messageLabel.setText(" ");
-            forgotEmailField.setText("");
-            forgotEmailMessageLabel.setForeground(Color.RED);
-            forgotEmailMessageLabel.setText(" ");
-            showScreen(FORGOT_EMAIL_SCREEN);
-        });
-
-        adminLoginButton.addActionListener(e -> {
-            messageLabel.setText(" ");
-            adminUsernameField.setText("");
-            adminLoginMessageLabel.setForeground(Color.RED);
-            adminLoginMessageLabel.setText(" ");
-            showScreen(ADMIN_LOGIN_SCREEN);
-        });
-
         // Pressing Enter while focus is anywhere on the login screen (email
         // field, PIN field, etc.) clicks the Login button, same as clicking
         // it with the mouse.
         bindEnterToButton(panel, loginButton);
 
-        return wrapWithHeader(panel);
+        return wrapWithHeader(panel, true);
     }
 
     // ------------------------------------------------------------------
@@ -1089,7 +1157,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         bindEnterToButton(panel, registerButton);
 
-        return wrapWithHeader(panel);
+        return wrapWithHeader(panel, true);
     }
 
     // ------------------------------------------------------------------
@@ -1221,7 +1289,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
             showScreen(LOGIN_SCREEN);
         });
 
-        return wrapWithHeader(panel);
+        return wrapWithHeader(panel, true);
     }
 
     // ------------------------------------------------------------------
@@ -1379,7 +1447,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         bindEnterToButton(panel, sendButton);
 
-        return wrapWithHeader(panel);
+        return wrapWithHeader(panel, true);
     }
 
     // ------------------------------------------------------------------
@@ -1463,7 +1531,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         bindEnterToButton(panel, sendButton);
 
-        return wrapWithHeader(panel);
+        return wrapWithHeader(panel, true);
     }
 
     // ------------------------------------------------------------------
@@ -1545,7 +1613,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         bindEnterToButton(panel, verifyButton);
 
-        return wrapWithHeader(panel);
+        return wrapWithHeader(panel, true);
     }
 
     // ------------------------------------------------------------------
@@ -1631,7 +1699,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         bindEnterToButton(panel, resetButton);
 
-        return wrapWithHeader(panel);
+        return wrapWithHeader(panel, true);
     }
 
     // ------------------------------------------------------------------
@@ -1703,7 +1771,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
 
         bindEnterToButton(panel, loginButton);
 
-        return wrapWithHeader(panel);
+        return wrapWithHeader(panel, true);
     }
 
     // ------------------------------------------------------------------
@@ -1840,7 +1908,7 @@ public class EagleCashOnlineBankingApp extends JFrame {
         JList<String> dialogList = new JList<>(dialogListModel);
         dialogList.setFont(new Font("Monospaced", Font.PLAIN, 12));
         JScrollPane dialogScrollPane = new JScrollPane(dialogList);
-        dialogScrollPane.setPreferredSize(new Dimension(480, 260));
+        dialogScrollPane.setPreferredSize(new Dimension(620, 300));
 
         JPanel dialogPanel = new JPanel(new BorderLayout(4, 4));
         dialogPanel.add(columnHeader, BorderLayout.NORTH);
